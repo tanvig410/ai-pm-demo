@@ -55,19 +55,20 @@ function buildBrandCardsStable(rows: any[], limit = 5): BrandCard[] {
 
 /** Fetch rows from n8n webhook. Accepts array or { data: [...] } */
 async function fetchDiscoverRows(): Promise<any[]> {
-  if (!DISCOVER_WEBHOOK) {
-    console.warn('VITE_DISCOVER_WEBHOOK not set; using fallback cards.');
+  const url = import.meta.env.VITE_DISCOVER_WEBHOOK;
+  if (!url) {
+    console.warn('VITE_DISCOVER_WEBHOOK not set; using fallback data.');
     return [];
   }
-  const headers: Record<string, string> = { Accept: 'application/json' };
-  if (DISCOVER_API_KEY) headers['x-api-key'] = DISCOVER_API_KEY;
 
-  const res = await fetch(DISCOVER_WEBHOOK, { headers, method: 'GET' });
+  // Simple GET, no custom headers → no preflight
+  const res = await fetch(url, { method: 'GET', mode: 'cors' });
   if (!res.ok) throw new Error(`Webhook error: ${res.status} ${res.statusText}`);
 
-  const payload = await res.json();
-  return Array.isArray(payload) ? payload : payload?.data ?? [];
+  // Your n8n Respond node is returning an array
+  return await res.json();
 }
+
 
 // ---------- Static fallbacks (your original images) ----------
 const STATIC_BRANDS: BrandCard[] = [
