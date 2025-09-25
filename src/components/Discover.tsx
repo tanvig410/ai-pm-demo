@@ -156,21 +156,22 @@ export function Discover({
 // ---- Replace the entire second useEffect with this one ----
 useEffect(() => {
   let cancelled = false;
-
   (async () => {
     try {
       const rows = await fetchDiscoverRows();
 
-      // Adjust these knobs as you like
-      const MAX_TILES = 12;     // how many cards you want to render
-      const MIN_SCORE = 0;      // e.g. 60 if you only want higher-score picks
-      const REQUIRE_FIELDS = ['image_url', 'product_url']; // must exist
+      // 👉 Expose all fetched rows for the modal (lookup by product_uid)
+      (window as any).__DISCOVER_MAP__ = new Map(
+        rows.map((r: any) => [r.product_uid || r.native_product_id, r])
+      );
 
-      // Pick top N by score across ALL vendors (no de-dupe)
+      const MAX_TILES = 12;
+      const MIN_SCORE = 0;
+      const REQUIRE_FIELDS = ['image_url', 'product_url'];
+
       const filtered = rows
         .filter((r: any) =>
-          REQUIRE_FIELDS.every((f) => r?.[f]) &&
-          (r.score ?? 0) >= MIN_SCORE
+          REQUIRE_FIELDS.every((f) => r?.[f]) && (r.score ?? 0) >= MIN_SCORE
         )
         .sort((a: any, b: any) => (b.score ?? 0) - (a.score ?? 0))
         .slice(0, MAX_TILES);
@@ -188,10 +189,8 @@ useEffect(() => {
       }
     } catch (e) {
       console.error('Discover webhook failed:', e);
-      // keep fallback on error
     }
   })();
-
   return () => { cancelled = true; };
 }, []);
 
