@@ -141,7 +141,8 @@ useEffect(() => {
         limit: 5,
         vendors: ['Zara', 'hm'],
         minScore: 80,
-        midjourney_prompt: not null
+        midjourney_prompt: not null,
+        limit: 10
 
       });
 
