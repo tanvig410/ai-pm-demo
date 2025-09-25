@@ -1,10 +1,109 @@
-import { useState } from 'react';
+// src/components/Discover.tsx
+import { useEffect, useState } from 'react';
 import { Plus, Filter, Edit2, X } from 'lucide-react';
 import { AddToCollectionPopup } from './AddToCollectionPopup';
 import { MarketFilterOverlay } from './MarketFilterOverlay';
 import { MarketStreamTab } from './MarketStreamTab';
 import { MarketInsightsTab } from './MarketInsightsTab';
 
+// ---------- Config (via Vite / Netlify envs) ----------
+
+
+// ---------- Helpers (safe, no runtime crashes) ----------
+type BrandCard = { id: string; title: string; subtitle: string; url: string; href?: string };
+
+function titleCase(s: string) {
+  return (s || '').toLowerCase().replace(/\b\w/g, (m) => m.toUpperCase());
+}
+
+function padWithFallback<T extends { id: string }>(primary: T[], fallback: T[], count: number) {
+  const used = new Set(primary.map((p) => p.id));
+  const extra = fallback.filter((f) => !used.has(f.id));
+  return [...primary, ...extra].slice(0, count);
+}
+
+/** Build “brand cards” from raw rows while preserving your original card look */
+function buildBrandCardsStable(rows: any[], limit = 5): BrandCard[] {
+  const seen = new Set<string>();
+  const cards: BrandCard[] = [];
+
+  for (const r of rows || []) {
+    const vendor = (r.vendor ?? '').trim();
+    const url = r.image_url ?? r.primary_image_url;
+    if (!vendor || !url) continue;
+
+    const vendorKey = vendor.toLowerCase();
+    if (seen.has(vendorKey)) continue;
+    seen.add(vendorKey);
+
+    cards.push({
+      id:
+        String(r.product_uid) ||
+        `${vendorKey}-${r.native_product_id || (crypto?.randomUUID?.() ?? Math.random().toString(36).slice(2))}`,
+      title: titleCase(vendor),
+      subtitle: `@${vendorKey}`,
+      url,
+      href: r.product_url || '#',
+    });
+
+    if (cards.length >= limit) break;
+  }
+
+  return cards;
+}
+
+/** Fetch rows from n8n webhook. Accepts array or { data: [...] } */
+async function fetchDiscoverRows(): Promise<any[]> {
+  const url = import.meta.env.VITE_DISCOVER_WEBHOOK;
+  if (!url) {
+    console.warn('VITE_DISCOVER_WEBHOOK not set; using fallback data.');
+    return [];
+  }
+
+  // Simple GET, no custom headers → no preflight
+  const res = await fetch(url, { method: 'GET', mode: 'cors' });
+  if (!res.ok) throw new Error(`Webhook error: ${res.status} ${res.statusText}`);
+
+  // Your n8n Respond node is returning an array
+  return await res.json();
+}
+
+
+// ---------- Static fallbacks (your original images) ----------
+const STATIC_BRANDS: BrandCard[] = [
+  {
+    id: 'brand-1',
+    title: 'Zara',
+    subtitle: '@zara',
+    url: 'https://static.zara.net/assets/public/74d8/7667/80d5487a82ba/54ab16af7b49/05029172330-p/05029172330-p.jpg?ts=1753515381675&w=1254',
+  },
+  {
+    id: 'brand-2',
+    title: 'Forever New',
+    subtitle: '@ForeverNew',
+    url: 'https://www.forevernew.co.in//pub/media/catalog/product/o/l/oldimlall_onbody_29521504_f.jpg?width=1046&height=1118&store=default&image-type=image',
+  },
+  {
+    id: 'brand-3',
+    title: 'Zara Collection',
+    subtitle: '@zara',
+    url: 'https://static.zara.net/assets/public/6203/dce9/d388499f97fb/e29f128674bf/08460501700-p/08460501700-p.jpg?ts=1753438567193&w=1254',
+  },
+  {
+    id: 'brand-4',
+    title: 'Uniqlo Basics',
+    subtitle: '@uniqlo',
+    url: 'https://static.zara.net/assets/public/45f6/3c46/9c5a498c9763/4fa6a6e7d499/04047476800-p/04047476800-p.jpg?ts=1732265080529&w=1440',
+  },
+  {
+    id: 'brand-5',
+    title: 'H&M Trends',
+    subtitle: '@hm',
+    url: 'https://image.hm.com/assets/hm/3a/d8/3ad8fc6726aac2101afb6767b6d06a07787256a7.jpg?imwidth=1536',
+  },
+];
+
+// ---------- Component ----------
 interface DiscoverProps {
   onFindSimilar: (imageId: string) => void;
   onImageClick: (image: { id: string; url: string; alt: string }) => void;
@@ -15,7 +114,15 @@ interface DiscoverProps {
   myCollectionImages?: any[];
 }
 
-export function Discover({ onFindSimilar, onImageClick, onCreateClick, onAddToMyCollection, onOpenInCanvas, onRecommend, myCollectionImages = [] }: DiscoverProps) {
+export function Discover({
+  onFindSimilar,
+  onImageClick,
+  onCreateClick,
+  onAddToMyCollection,
+  onOpenInCanvas,
+  onRecommend,
+  myCollectionImages = [],
+}: DiscoverProps) {
   const [activeFilter, setActiveFilter] = useState('Featured');
   const [activePopup, setActivePopup] = useState<string | null>(null);
   const [popupAnchorRect, setPopupAnchorRect] = useState<DOMRect | null>(null);
@@ -28,45 +135,67 @@ export function Discover({ onFindSimilar, onImageClick, onCreateClick, onAddToMy
   const [productTypeFilter, setProductTypeFilter] = useState('All Products');
   const buttonRefs = useState(() => new Map<string, HTMLButtonElement>())[0];
 
-  // Apparel category filters - added Market Stream and Market Insights
+  // Category filters
   const categoryFilters = [
-    'Featured', 'Denim', 'Womenswear', 'Menswear', 'WGSN', 'Heuretics', 'London FW 2025', 'My Collection', 'Market Stream', 'Market Insights'
+    'Featured',
+    'Denim',
+    'Womenswear',
+    'Menswear',
+    'WGSN',
+    'Heuretics',
+    'London FW 2025',
+    'My Collection',
+    'Market Stream',
+    'Market Insights',
   ];
 
-  // Sample data for different sections
-  const brandsData = [
-    {
-      id: 'brand-1',
-      title: 'Zara',
-      subtitle: '@zara',
-      url: 'https://static.zara.net/assets/public/74d8/7667/80d5487a82ba/54ab16af7b49/05029172330-p/05029172330-p.jpg?ts=1753515381675&w=1254',
-    },
-    {
-      id: 'brand-2',
-      title: 'Forever New',
-      subtitle: '@ForeverNew',
-      url: 'https://www.forevernew.co.in//pub/media/catalog/product/o/l/oldimlall_onbody_29521504_f.jpg?width=1046&height=1118&store=default&image-type=image',
-    },
-    {
-      id: 'brand-3',
-      title: 'Zara Collection',
-      subtitle: '@zara',
-      url: 'https://static.zara.net/assets/public/6203/dce9/d388499f97fb/e29f128674bf/08460501700-p/08460501700-p.jpg?ts=1753438567193&w=1254',
-    },
-    {
-      id: 'brand-4',
-      title: 'Uniqlo Basics',
-      subtitle: '@uniqlo',
-      url: 'https://static.zara.net/assets/public/45f6/3c46/9c5a498c9763/4fa6a6e7d499/04047476800-p/04047476800-p.jpg?ts=1732265080529&w=1440',
-    },
-    {
-      id: 'brand-5',
-      title: 'H&M Trends',
-      subtitle: '@hm',
-      url: 'https://image.hm.com/assets/hm/3a/d8/3ad8fc6726aac2101afb6767b6d06a07787256a7.jpg?imwidth=1536',
-    },
-  ];
+  // ---- Dynamic Brands with safe fallback ----
+  const [brandsData, setBrandsData] = useState<BrandCard[]>(STATIC_BRANDS);
 
+  
+// ---- Replace the entire second useEffect with this one ----
+useEffect(() => {
+  let cancelled = false;
+  (async () => {
+    try {
+      const rows = await fetchDiscoverRows();
+
+      // 👉 Expose all fetched rows for the modal (lookup by product_uid)
+      (window as any).__DISCOVER_MAP__ = new Map(
+        rows.map((r: any) => [r.product_uid || r.native_product_id, r])
+      );
+
+      const MAX_TILES = 12;
+      const MIN_SCORE = 0;
+      const REQUIRE_FIELDS = ['image_url', 'product_url'];
+
+      const filtered = rows
+        .filter((r: any) =>
+          REQUIRE_FIELDS.every((f) => r?.[f]) && (r.score ?? 0) >= MIN_SCORE
+        )
+        .sort((a: any, b: any) => (b.score ?? 0) - (a.score ?? 0))
+        .slice(0, MAX_TILES);
+
+      const cards = filtered.map((r: any, i: number) => ({
+        id: r.product_uid || r.native_product_id || `row-${i}`,
+        title: titleCase(r.vendor || 'Unknown'),
+        subtitle: `@${(r.vendor || '').toLowerCase()}`,
+        url: r.image_url || r.primary_image_url,
+        href: r.product_url || '#',
+      }));
+
+      if (!cancelled && cards.length) {
+        setBrandsData(cards);
+      }
+    } catch (e) {
+      console.error('Discover webhook failed:', e);
+    }
+  })();
+  return () => { cancelled = true; };
+}, []);
+
+
+  // ---------- Other static sections (unchanged) ----------
   const worldReportsData = [
     {
       id: 'report-1',
@@ -89,7 +218,7 @@ export function Discover({ onFindSimilar, onImageClick, onCreateClick, onAddToMy
     {
       id: 'report-4',
       title: 'Fabric Forecast',
-      subtitle: 'Fabric Trends' ,
+      subtitle: 'Fabric Trends',
       url: 'https://wwd.com/wp-content/uploads/2025/07/iris-van-herpen-fall-25-couture-bsb-em-0002.jpg?w=225',
     },
   ];
@@ -121,23 +250,23 @@ export function Discover({ onFindSimilar, onImageClick, onCreateClick, onAddToMy
     },
   ];
 
+  // ---------- UI handlers (unchanged) ----------
   const handleImageCardClick = (item: any) => {
     onImageClick({
       id: item.id,
       url: item.url,
-      alt: item.title
+      alt: item.title,
     });
   };
 
   const handleAddToMyCollection = (item: any) => {
     if (onAddToMyCollection) {
-      // Determine the source section for the subtitle
       let sourceSection = 'Saved from Discover';
-      if (brandsData.find(brand => brand.id === item.id)) {
+      if (brandsData.find((brand) => brand.id === item.id)) {
         sourceSection = 'Saved from Brands';
-      } else if (worldReportsData.find(report => report.id === item.id)) {
+      } else if (worldReportsData.find((report) => report.id === item.id)) {
         sourceSection = 'Saved from World Reports';
-      } else if (internalData.find(internal => internal.id === item.id)) {
+      } else if (internalData.find((internal) => internal.id === item.id)) {
         sourceSection = 'Saved from Internal Database';
       }
 
@@ -147,7 +276,7 @@ export function Discover({ onFindSimilar, onImageClick, onCreateClick, onAddToMy
         alt: item.title,
         title: item.title,
         subtitle: sourceSection,
-        addedAt: new Date().toISOString()
+        addedAt: new Date().toISOString(),
       });
     }
   };
@@ -157,7 +286,7 @@ export function Discover({ onFindSimilar, onImageClick, onCreateClick, onAddToMy
       onOpenInCanvas({
         id: item.id,
         url: item.url,
-        alt: item.title
+        alt: item.title,
       });
     }
   };
@@ -169,7 +298,7 @@ export function Discover({ onFindSimilar, onImageClick, onCreateClick, onAddToMy
         url: item.url,
         alt: item.title,
         title: item.title,
-        subtitle: item.subtitle
+        subtitle: item.subtitle,
       });
     }
   };
@@ -178,7 +307,7 @@ export function Discover({ onFindSimilar, onImageClick, onCreateClick, onAddToMy
     <div className="mb-16">
       <h2 className="text-[20px] font-medium text-[#F5F6F7] mb-6 px-6">{title}</h2>
       <div className="px-6">
-        <div 
+        <div
           className="grid gap-6"
           style={{
             gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))',
@@ -197,10 +326,11 @@ export function Discover({ onFindSimilar, onImageClick, onCreateClick, onAddToMy
                 className="w-full h-full object-cover"
                 onError={(e) => {
                   const target = e.target as HTMLImageElement;
-                  target.src = `https://encrypted-tbn2.gstatic.com/shopping?q=tbn:ANd9GcS1DBh0wipHU9O-TIYKBUDEpj6mpwO16W6mXC2Qfk-cpnUMdUYfJNCrty2TtLidx_tPP3rwqUuYwsAnoKeOgBsFGjh8Yr6CGdKzx5NMUmCeBIuIvFNvHzvov_zXcel8fPLTtmaQOIYYXNg&usqp=CAc`;
+                  target.src =
+                    'https://encrypted-tbn2.gstatic.com/shopping?q=tbn:ANd9GcS1DBh0wipHU9O-TIYKBUDEpj6mpwO16W6mXC2Qfk-cpnUMdUYfJNCrty2TtLidx_tPP3rwqUuYwsAnoKeOgBsFGjh8Yr6CGdKzx5NMUmCeBIuIvFNvHzvov_zXcel8fPLTtmaQOIYYXNg&usqp=CAc';
                 }}
               />
-              
+
               {/* Content Overlay */}
               <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-black/20 to-transparent">
                 <div className="absolute bottom-4 left-4 right-4">
@@ -213,7 +343,7 @@ export function Discover({ onFindSimilar, onImageClick, onCreateClick, onAddToMy
               <div className="absolute inset-0 bg-black/0 group-hover:bg-gradient-to-t group-hover:from-black/15 group-hover:via-transparent group-hover:to-transparent transition-all duration-300 pointer-events-none">
                 <div className="absolute bottom-4 right-4 flex items-center gap-2 opacity-0 group-hover:opacity-100 transform translate-y-2 group-hover:translate-y-0 transition-all duration-300 pointer-events-auto">
                   {activeFilter === 'My Collection' ? (
-                    <button 
+                    <button
                       onClick={(e) => {
                         e.stopPropagation();
                         handleOpenInCanvas(item);
@@ -223,7 +353,7 @@ export function Discover({ onFindSimilar, onImageClick, onCreateClick, onAddToMy
                       Open in Canvas
                     </button>
                   ) : (
-                    <button 
+                    <button
                       onClick={(e) => {
                         e.stopPropagation();
                         onFindSimilar(item.id);
@@ -233,7 +363,7 @@ export function Discover({ onFindSimilar, onImageClick, onCreateClick, onAddToMy
                       Find Similar
                     </button>
                   )}
-                  <button 
+                  <button
                     ref={(el) => {
                       if (el) buttonRefs.set(item.id, el);
                     }}
@@ -247,7 +377,6 @@ export function Discover({ onFindSimilar, onImageClick, onCreateClick, onAddToMy
                   >
                     <Plus className="h-4 w-4 text-white" />
                   </button>
-
                 </div>
               </div>
             </div>
@@ -268,9 +397,7 @@ export function Discover({ onFindSimilar, onImageClick, onCreateClick, onAddToMy
                 <Plus className="w-6 h-6 text-[#9CA3AF]" />
               </div>
               <h3 className="text-[16px] font-medium text-[#F5F6F7] mb-2">No saved items yet</h3>
-              <p className="text-[14px] text-[#9CA3AF]">
-                Start building your collection by adding images from other categories
-              </p>
+              <p className="text-[14px] text-[#9CA3AF]">Start building your collection by adding images from other categories</p>
             </div>
           </div>
         </div>
@@ -288,7 +415,6 @@ export function Discover({ onFindSimilar, onImageClick, onCreateClick, onAddToMy
   const handleMarketSearch = (mode: 'stream' | 'insights', filters: any) => {
     setMarketSearchResults({ mode, filters });
     setProductTypeFilter(filters.productType || 'All Products');
-    // Ensure the tab is highlighted correctly
     setActiveFilter(mode === 'stream' ? 'Market Stream' : 'Market Insights');
   };
 
@@ -298,31 +424,31 @@ export function Discover({ onFindSimilar, onImageClick, onCreateClick, onAddToMy
   };
 
   const handleEditMarketFilters = () => {
-    if (marketSearchResults) {
-      setMarketFilterMode(marketSearchResults.mode);
-    }
+    if (marketSearchResults) setMarketFilterMode(marketSearchResults.mode);
     setIsMarketFilterOpen(true);
   };
 
   const getActiveFiltersCount = (filters: any, mode: 'stream' | 'insights') => {
     if (mode === 'stream') {
-      return [filters.gender, filters.category, filters.subcategory, filters.style].filter(Boolean).length +
-             filters.weblinks.filter(Boolean).length +
-             (filters.productType !== 'All Products' ? 1 : 0);
+      return (
+        [filters.gender, filters.category, filters.subcategory, filters.style].filter(Boolean).length +
+        filters.weblinks.filter(Boolean).length +
+        (filters.productType !== 'All Products' ? 1 : 0)
+      );
     } else {
       return [filters.region, filters.timeRange, filters.insightType, filters.marketSegment, filters.dataSource].filter(Boolean).length;
     }
   };
 
   const getActiveFiltersText = (filters: any, mode: 'stream' | 'insights') => {
-    const activeFilters = [];
+    const activeFilters: string[] = [];
     if (mode === 'stream') {
       if (filters.gender) activeFilters.push(`Gender: ${filters.gender}`);
       if (filters.category) activeFilters.push(`Category: ${filters.category}`);
       if (filters.subcategory) activeFilters.push(`Type: ${filters.subcategory}`);
       if (filters.style) activeFilters.push(`Style: ${filters.style}`);
       if (filters.productType !== 'All Products') activeFilters.push(`Product: ${filters.productType}`);
-      const activeWeblinks = filters.weblinks.filter(Boolean);
+      const activeWeblinks = (filters.weblinks || []).filter(Boolean);
       if (activeWeblinks.length > 0) activeFilters.push(`Sources: ${activeWeblinks.length} website(s)`);
     } else {
       if (filters.region) activeFilters.push(`Region: ${filters.region}`);
@@ -334,6 +460,7 @@ export function Discover({ onFindSimilar, onImageClick, onCreateClick, onAddToMy
     return activeFilters.join(' • ');
   };
 
+  // ---------- Render ----------
   return (
     <div className="min-h-screen pt-6">
       {/* Category Filters */}
@@ -344,43 +471,28 @@ export function Discover({ onFindSimilar, onImageClick, onCreateClick, onAddToMy
               key={filter}
               onClick={() => {
                 if (filter === 'Market Stream') {
-                  // If we already have search results for this mode, don't clear them
-                  if (marketSearchResults?.mode === 'stream') {
-                    setActiveFilter('Market Stream');
-                  } else {
-                    handleMarketFilterClick('stream');
-                  }
+                  if (marketSearchResults?.mode === 'stream') setActiveFilter('Market Stream');
+                  else handleMarketFilterClick('stream');
                 } else if (filter === 'Market Insights') {
-                  // If we already have search results for this mode, don't clear them
-                  if (marketSearchResults?.mode === 'insights') {
-                    setActiveFilter('Market Insights');
-                  } else {
-                    handleMarketFilterClick('insights');
-                  }
+                  if (marketSearchResults?.mode === 'insights') setActiveFilter('Market Insights');
+                  else handleMarketFilterClick('insights');
                 } else {
-                  // Clear market search results when switching to other tabs
-                  if (marketSearchResults) {
-                    setMarketSearchResults(null);
-                  }
+                  if (marketSearchResults) setMarketSearchResults(null);
                   setActiveFilter(filter);
                 }
               }}
               className={`px-4 py-2 text-[14px] font-medium rounded-lg whitespace-nowrap transition-colors duration-200 relative ${
-                activeFilter === filter
-                  ? 'text-[#F5F6F7]'
-                  : 'text-[#9CA3AF] hover:text-[#F5F6F7] hover:bg-[#1C1D20]'
+                activeFilter === filter ? 'text-[#F5F6F7]' : 'text-[#9CA3AF] hover:text-[#F5F6F7] hover:bg-[#1C1D20]'
               }`}
             >
               {filter}
-              {activeFilter === filter && (
-                <div className="absolute -bottom-1 left-4 right-4 h-0.5 bg-[#F5F6F7]"></div>
-              )}
+              {activeFilter === filter && <div className="absolute -bottom-1 left-4 right-4 h-0.5 bg-[#F5F6F7]" />}
             </button>
           ))}
         </div>
       </div>
 
-      {/* Market Search Results - Show when marketSearchResults exists */}
+      {/* Market Search Results */}
       {marketSearchResults && (
         <div className="pb-20">
           {/* Active Filters Summary */}
@@ -420,21 +532,14 @@ export function Discover({ onFindSimilar, onImageClick, onCreateClick, onAddToMy
 
           {/* Market Results Content */}
           {marketSearchResults.mode === 'stream' ? (
-            <MarketStreamTab 
-              onFindSimilar={onFindSimilar}
-              hideForm={true}
-              appliedFilters={marketSearchResults.filters}
-            />
+            <MarketStreamTab onFindSimilar={onFindSimilar} hideForm={true} appliedFilters={marketSearchResults.filters} />
           ) : (
-            <MarketInsightsTab 
-              hideForm={true}
-              appliedFilters={marketSearchResults.filters}
-            />
+            <MarketInsightsTab hideForm={true} appliedFilters={marketSearchResults.filters} />
           )}
         </div>
       )}
 
-      {/* Main Content Sections - shown when not in market search mode */}
+      {/* Main Content Sections */}
       {!marketSearchResults && (
         <div className="pb-20">
           {activeFilter === 'My Collection' ? (
@@ -458,7 +563,7 @@ export function Discover({ onFindSimilar, onImageClick, onCreateClick, onAddToMy
             setPopupAnchorRect(null);
           }}
           onAddToMyCollection={() => {
-            const currentItem = [...brandsData, ...worldReportsData, ...internalData].find(item => item.id === activePopup);
+            const currentItem = [...brandsData, ...worldReportsData, ...internalData].find((item) => item.id === activePopup);
             if (currentItem) {
               handleAddToMyCollection(currentItem);
             }
@@ -466,7 +571,7 @@ export function Discover({ onFindSimilar, onImageClick, onCreateClick, onAddToMy
             setPopupAnchorRect(null);
           }}
           onRecommend={() => {
-            const currentItem = [...brandsData, ...worldReportsData, ...internalData].find(item => item.id === activePopup);
+            const currentItem = [...brandsData, ...worldReportsData, ...internalData].find((item) => item.id === activePopup);
             if (currentItem) {
               handleRecommend(currentItem);
             }
