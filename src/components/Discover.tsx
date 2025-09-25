@@ -1,55 +1,34 @@
-import { useState, useEffect } from 'react';
+// src/components/Discover.tsx
+import { useEffect, useState } from 'react';
 import { Plus, Filter, Edit2, X } from 'lucide-react';
 import { AddToCollectionPopup } from './AddToCollectionPopup';
 import { MarketFilterOverlay } from './MarketFilterOverlay';
 import { MarketStreamTab } from './MarketStreamTab';
 import { MarketInsightsTab } from './MarketInsightsTab';
-const DISCOVER_WEBHOOK = import.meta.env.VITE_DISCOVER_WEBHOOK;
-const DISCOVER_API_KEY = import.meta.env.VITE_DISCOVER_API_KEY;
-useEffect(() => {
-  let cancelled = false;
 
-  async function load() {
-    try {
-      if (!DISCOVER_WEBHOOK) return; // no webhook → keep static fallback
+// ---------- Config (via Vite / Netlify envs) ----------
+const DISCOVER_WEBHOOK = import.meta.env.VITE_DISCOVER_WEBHOOK as string | undefined;
+const DISCOVER_API_KEY = import.meta.env.VITE_DISCOVER_API_KEY as string | undefined;
 
-      const res = await fetch(DISCOVER_WEBHOOK, {
-        headers: DISCOVER_API_KEY ? { 'x-api-key': DISCOVER_API_KEY } : {},
-      });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-
-      const rows = await res.json();           // expects your n8n to return an array of rows
-      const dynamic = buildBrandCardsStable(rows, 5); // no vendor restriction
-      if (!cancelled && dynamic.length) {
-        setBrandsData(padWithFallback(dynamic, STATIC_BRANDS, 5)); // always 5 cards like before
-      }
-    } catch (e) {
-      // On any error, we intentionally keep STATIC_BRANDS so the UI doesn't shift
-      console.warn('Discover: using static fallback', e);
-    }
-  }
-
-  load();
-  return () => { cancelled = true; };
-}, []);
-
+// ---------- Helpers (safe, no runtime crashes) ----------
+type BrandCard = { id: string; title: string; subtitle: string; url: string; href?: string };
 
 function titleCase(s: string) {
   return (s || '').toLowerCase().replace(/\b\w/g, (m) => m.toUpperCase());
 }
 
-function padWithFallback<T>(primary: T[], fallback: T[], count: number) {
-  const used = new Set(primary.map((p: any) => p.id));
-  const extra = fallback.filter((f: any) => !used.has(f.id));
+function padWithFallback<T extends { id: string }>(primary: T[], fallback: T[], count: number) {
+  const used = new Set(primary.map((p) => p.id));
+  const extra = fallback.filter((f) => !used.has(f.id));
   return [...primary, ...extra].slice(0, count);
 }
 
 /** Build “brand cards” from raw rows while preserving your original card look */
-function buildBrandCardsStable(rows: any[], limit = 5) {
+function buildBrandCardsStable(rows: any[], limit = 5): BrandCard[] {
   const seen = new Set<string>();
-  const cards: any[] = [];
+  const cards: BrandCard[] = [];
 
-  for (const r of rows) {
+  for (const r of rows || []) {
     const vendor = (r.vendor ?? '').trim();
     const url = r.image_url ?? r.primary_image_url;
     if (!vendor || !url) continue;
@@ -59,10 +38,12 @@ function buildBrandCardsStable(rows: any[], limit = 5) {
     seen.add(vendorKey);
 
     cards.push({
-      id: r.product_uid || `${vendorKey}-${r.native_product_id || Math.random()}`,
-      title: titleCase(vendor),          // ✅ Title-cased (no more all-lowercase)
-      subtitle: `@${vendorKey}`,         // same subtitle style you had
-      url,                               // keep big hero imagery as before
+      id:
+        String(r.product_uid) ||
+        `${vendorKey}-${r.native_product_id || (crypto?.randomUUID?.() ?? Math.random().toString(36).slice(2))}`,
+      title: titleCase(vendor),
+      subtitle: `@${vendorKey}`,
+      url,
       href: r.product_url || '#',
     });
 
@@ -72,82 +53,24 @@ function buildBrandCardsStable(rows: any[], limit = 5) {
   return cards;
 }
 
-// --- Webhook env var (Netlify: VITE_DISCOVER_WEBHOOK) ---
-// Expected n8n response: either an array of rows or { data: [...] }.
-// Each row should include: product_uid, vendor, image_url, product_url, score (optional).
+/** Fetch rows from n8n webhook. Accepts array or { data: [...] } */
 async function fetchDiscoverRows(): Promise<any[]> {
-  const url = import.meta.env.VITE_DISCOVER_WEBHOOK;
-  if (!url) {
-    console.warn('VITE_DISCOVER_WEBHOOK not set; using fallback data.');
+  if (!DISCOVER_WEBHOOK) {
+    console.warn('VITE_DISCOVER_WEBHOOK not set; using fallback cards.');
     return [];
   }
+  const headers: Record<string, string> = { Accept: 'application/json' };
+  if (DISCOVER_API_KEY) headers['x-api-key'] = DISCOVER_API_KEY;
 
-  const res = await fetch(url, { headers: { Accept: 'application/json' } });
+  const res = await fetch(DISCOVER_WEBHOOK, { headers, method: 'GET' });
   if (!res.ok) throw new Error(`Webhook error: ${res.status} ${res.statusText}`);
 
   const payload = await res.json();
-  const rows = Array.isArray(payload) ? payload : (payload?.data ?? []);
-  return rows;
+  return Array.isArray(payload) ? payload : payload?.data ?? [];
 }
 
-// Build your “brand tiles” (same shape your UI already expects)
-function buildBrandCards(
-  rows: any[],
-  opts?: {
-    limit?: number;
-    vendors?: string[];
-    minScore?: number;
-    requiredFields?: string[]; // NEW
-  }
-) {
-  const limit = opts?.limit ?? 5;
-  const vendorsList = (opts?.vendors ?? []).map((v) => v.toLowerCase());
-  const minScore = opts?.minScore ?? 0;
-  const requiredFields = opts?.requiredFields ?? []; // NEW
-
-  const filtered = rows.filter((r) => {
-    const vendorOk = vendorsList.length
-      ? vendorsList.includes((r.vendor ?? '').toLowerCase())
-      : true;
-    const scoreOk = (r.score ?? 0) >= minScore;
-
-    // all required fields must be present and non-empty
-    const fieldsOk = requiredFields.every((f) => {
-      const v = r?.[f];
-      return v !== null && v !== undefined && String(v).trim() !== '';
-    });
-
-    return vendorOk && scoreOk && fieldsOk && !!r.vendor && !!r.image_url;
-  });
-
-  // group by vendor and keep the highest-scored item per vendor
-  const byVendor = new Map<string, any[]>();
-  filtered.forEach((r) => {
-    const key = r.vendor as string;
-    if (!byVendor.has(key)) byVendor.set(key, []);
-    byVendor.get(key)!.push(r);
-  });
-
-  const cards: any[] = [];
-  for (const [vendor, items] of byVendor.entries()) {
-    const top = items.sort((a, b) => (b.score ?? 0) - (a.score ?? 0))[0];
-    if (top?.image_url) {
-      cards.push({
-        id: top.product_uid || `${vendor}-${Date.now()}`,
-        title: vendor,
-        subtitle: `@${(vendor || '').toLowerCase()}`,
-        url: top.image_url,
-        href: top.product_url || '#',
-      });
-    }
-  }
-
-  return cards.slice(0, limit);
-}
-
-
-// Fallback to keep page looking good if webhook fails
-const fallbackBrands = [
+// ---------- Static fallbacks (your original images) ----------
+const STATIC_BRANDS: BrandCard[] = [
   {
     id: 'brand-1',
     title: 'Zara',
@@ -180,6 +103,7 @@ const fallbackBrands = [
   },
 ];
 
+// ---------- Component ----------
 interface DiscoverProps {
   onFindSimilar: (imageId: string) => void;
   onImageClick: (image: { id: string; url: string; alt: string }) => void;
@@ -190,7 +114,15 @@ interface DiscoverProps {
   myCollectionImages?: any[];
 }
 
-export function Discover({ onFindSimilar, onImageClick, onCreateClick, onAddToMyCollection, onOpenInCanvas, onRecommend, myCollectionImages = [] }: DiscoverProps) {
+export function Discover({
+  onFindSimilar,
+  onImageClick,
+  onCreateClick,
+  onAddToMyCollection,
+  onOpenInCanvas,
+  onRecommend,
+  myCollectionImages = [],
+}: DiscoverProps) {
   const [activeFilter, setActiveFilter] = useState('Featured');
   const [activePopup, setActivePopup] = useState<string | null>(null);
   const [popupAnchorRect, setPopupAnchorRect] = useState<DOMRect | null>(null);
@@ -203,74 +135,43 @@ export function Discover({ onFindSimilar, onImageClick, onCreateClick, onAddToMy
   const [productTypeFilter, setProductTypeFilter] = useState('All Products');
   const buttonRefs = useState(() => new Map<string, HTMLButtonElement>())[0];
 
-  // Apparel category filters - added Market Stream and Market Insights
+  // Category filters
   const categoryFilters = [
-    'Featured', 'Denim', 'Womenswear', 'Menswear', 'WGSN', 'Heuretics', 'London FW 2025', 'My Collection', 'Market Stream', 'Market Insights'
+    'Featured',
+    'Denim',
+    'Womenswear',
+    'Menswear',
+    'WGSN',
+    'Heuretics',
+    'London FW 2025',
+    'My Collection',
+    'Market Stream',
+    'Market Insights',
   ];
 
-  // Sample data for different sections
- // Replace hardcoded brandsData with state that starts from fallback and hydrates from webhook
-// Static fallback (keeps your original look if API fails or returns few items)
-const STATIC_BRANDS = [
-  {
-    id: 'brand-1',
-    title: 'Zara',
-    subtitle: '@zara',
-    url: 'https://static.zara.net/assets/public/74d8/7667/80d5487a82ba/54ab16af7b49/05029172330-p/05029172330-p.jpg?ts=1753515381675&w=1254',
-  },
-  {
-    id: 'brand-2',
-    title: 'Forever New',
-    subtitle: '@ForeverNew',
-    url: 'https://www.forevernew.co.in//pub/media/catalog/product/o/l/oldimlall_onbody_29521504_f.jpg?width=1046&height=1118&store=default&image-type=image',
-  },
-  {
-    id: 'brand-3',
-    title: 'Zara Collection',
-    subtitle: '@zara',
-    url: 'https://static.zara.net/assets/public/6203/dce9/d388499f97fb/e29f128674bf/08460501700-p/08460501700-p.jpg?ts=1753438567193&w=1254',
-  },
-  {
-    id: 'brand-4',
-    title: 'Uniqlo Basics',
-    subtitle: '@uniqlo',
-    url: 'https://static.zara.net/assets/public/45f6/3c46/9c5a498c9763/4fa6a6e7d499/04047476800-p/04047476800-p.jpg?ts=1732265080529&w=1440',
-  },
-  {
-    id: 'brand-5',
-    title: 'H&M Trends',
-    subtitle: '@hm',
-    url: 'https://image.hm.com/assets/hm/3a/d8/3ad8fc6726aac2101afb6767b6d06a07787256a7.jpg?imwidth=1536',
-  },
-];
+  // ---- Dynamic Brands with safe fallback ----
+  const [brandsData, setBrandsData] = useState<BrandCard[]>(STATIC_BRANDS);
 
-const [brandsData, setBrandsData] = useState(STATIC_BRANDS);
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const rows = await fetchDiscoverRows();
+        const cards = buildBrandCardsStable(rows, 5); // keep 5 tiles like your original UI
+        if (!cancelled && cards.length) {
+          setBrandsData(padWithFallback(cards, STATIC_BRANDS, 5));
+        }
+      } catch (err) {
+        console.warn('Discover dynamic load failed → using fallback', err);
+        // keep STATIC_BRANDS
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
-  
-useEffect(() => {
-  let cancelled = false;
-  (async () => {
-    try {
-      const rows = await fetchDiscoverRows();
-
-      // You control what appears:
-      //   - limit the number of tiles
-      //   - force particular vendors
-      //   - require a score threshold
-      const cards = buildBrandCards(rows, {
-        limit: 10,
-        vendors: ['Zara', 'hm'],
-        minScore: 80      });
-
-      if (!cancelled && cards.length) setBrandsData(cards);
-    } catch (e) {
-      console.error('Discover webhook failed:', e);
-      // keep fallback on error
-    }
-  })();
-  return () => { cancelled = true; };
-}, []);
-
+  // ---------- Other static sections (unchanged) ----------
   const worldReportsData = [
     {
       id: 'report-1',
@@ -293,7 +194,7 @@ useEffect(() => {
     {
       id: 'report-4',
       title: 'Fabric Forecast',
-      subtitle: 'Fabric Trends' ,
+      subtitle: 'Fabric Trends',
       url: 'https://wwd.com/wp-content/uploads/2025/07/iris-van-herpen-fall-25-couture-bsb-em-0002.jpg?w=225',
     },
   ];
@@ -325,23 +226,23 @@ useEffect(() => {
     },
   ];
 
+  // ---------- UI handlers (unchanged) ----------
   const handleImageCardClick = (item: any) => {
     onImageClick({
       id: item.id,
       url: item.url,
-      alt: item.title
+      alt: item.title,
     });
   };
 
   const handleAddToMyCollection = (item: any) => {
     if (onAddToMyCollection) {
-      // Determine the source section for the subtitle
       let sourceSection = 'Saved from Discover';
-      if (brandsData.find(brand => brand.id === item.id)) {
+      if (brandsData.find((brand) => brand.id === item.id)) {
         sourceSection = 'Saved from Brands';
-      } else if (worldReportsData.find(report => report.id === item.id)) {
+      } else if (worldReportsData.find((report) => report.id === item.id)) {
         sourceSection = 'Saved from World Reports';
-      } else if (internalData.find(internal => internal.id === item.id)) {
+      } else if (internalData.find((internal) => internal.id === item.id)) {
         sourceSection = 'Saved from Internal Database';
       }
 
@@ -351,7 +252,7 @@ useEffect(() => {
         alt: item.title,
         title: item.title,
         subtitle: sourceSection,
-        addedAt: new Date().toISOString()
+        addedAt: new Date().toISOString(),
       });
     }
   };
@@ -361,7 +262,7 @@ useEffect(() => {
       onOpenInCanvas({
         id: item.id,
         url: item.url,
-        alt: item.title
+        alt: item.title,
       });
     }
   };
@@ -373,7 +274,7 @@ useEffect(() => {
         url: item.url,
         alt: item.title,
         title: item.title,
-        subtitle: item.subtitle
+        subtitle: item.subtitle,
       });
     }
   };
@@ -382,7 +283,7 @@ useEffect(() => {
     <div className="mb-16">
       <h2 className="text-[20px] font-medium text-[#F5F6F7] mb-6 px-6">{title}</h2>
       <div className="px-6">
-        <div 
+        <div
           className="grid gap-6"
           style={{
             gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))',
@@ -401,10 +302,11 @@ useEffect(() => {
                 className="w-full h-full object-cover"
                 onError={(e) => {
                   const target = e.target as HTMLImageElement;
-                  target.src = `https://encrypted-tbn2.gstatic.com/shopping?q=tbn:ANd9GcS1DBh0wipHU9O-TIYKBUDEpj6mpwO16W6mXC2Qfk-cpnUMdUYfJNCrty2TtLidx_tPP3rwqUuYwsAnoKeOgBsFGjh8Yr6CGdKzx5NMUmCeBIuIvFNvHzvov_zXcel8fPLTtmaQOIYYXNg&usqp=CAc`;
+                  target.src =
+                    'https://encrypted-tbn2.gstatic.com/shopping?q=tbn:ANd9GcS1DBh0wipHU9O-TIYKBUDEpj6mpwO16W6mXC2Qfk-cpnUMdUYfJNCrty2TtLidx_tPP3rwqUuYwsAnoKeOgBsFGjh8Yr6CGdKzx5NMUmCeBIuIvFNvHzvov_zXcel8fPLTtmaQOIYYXNg&usqp=CAc';
                 }}
               />
-              
+
               {/* Content Overlay */}
               <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-black/20 to-transparent">
                 <div className="absolute bottom-4 left-4 right-4">
@@ -417,7 +319,7 @@ useEffect(() => {
               <div className="absolute inset-0 bg-black/0 group-hover:bg-gradient-to-t group-hover:from-black/15 group-hover:via-transparent group-hover:to-transparent transition-all duration-300 pointer-events-none">
                 <div className="absolute bottom-4 right-4 flex items-center gap-2 opacity-0 group-hover:opacity-100 transform translate-y-2 group-hover:translate-y-0 transition-all duration-300 pointer-events-auto">
                   {activeFilter === 'My Collection' ? (
-                    <button 
+                    <button
                       onClick={(e) => {
                         e.stopPropagation();
                         handleOpenInCanvas(item);
@@ -427,7 +329,7 @@ useEffect(() => {
                       Open in Canvas
                     </button>
                   ) : (
-                    <button 
+                    <button
                       onClick={(e) => {
                         e.stopPropagation();
                         onFindSimilar(item.id);
@@ -437,7 +339,7 @@ useEffect(() => {
                       Find Similar
                     </button>
                   )}
-                  <button 
+                  <button
                     ref={(el) => {
                       if (el) buttonRefs.set(item.id, el);
                     }}
@@ -451,7 +353,6 @@ useEffect(() => {
                   >
                     <Plus className="h-4 w-4 text-white" />
                   </button>
-
                 </div>
               </div>
             </div>
@@ -472,9 +373,7 @@ useEffect(() => {
                 <Plus className="w-6 h-6 text-[#9CA3AF]" />
               </div>
               <h3 className="text-[16px] font-medium text-[#F5F6F7] mb-2">No saved items yet</h3>
-              <p className="text-[14px] text-[#9CA3AF]">
-                Start building your collection by adding images from other categories
-              </p>
+              <p className="text-[14px] text-[#9CA3AF]">Start building your collection by adding images from other categories</p>
             </div>
           </div>
         </div>
@@ -492,7 +391,6 @@ useEffect(() => {
   const handleMarketSearch = (mode: 'stream' | 'insights', filters: any) => {
     setMarketSearchResults({ mode, filters });
     setProductTypeFilter(filters.productType || 'All Products');
-    // Ensure the tab is highlighted correctly
     setActiveFilter(mode === 'stream' ? 'Market Stream' : 'Market Insights');
   };
 
@@ -502,31 +400,31 @@ useEffect(() => {
   };
 
   const handleEditMarketFilters = () => {
-    if (marketSearchResults) {
-      setMarketFilterMode(marketSearchResults.mode);
-    }
+    if (marketSearchResults) setMarketFilterMode(marketSearchResults.mode);
     setIsMarketFilterOpen(true);
   };
 
   const getActiveFiltersCount = (filters: any, mode: 'stream' | 'insights') => {
     if (mode === 'stream') {
-      return [filters.gender, filters.category, filters.subcategory, filters.style].filter(Boolean).length +
-             filters.weblinks.filter(Boolean).length +
-             (filters.productType !== 'All Products' ? 1 : 0);
+      return (
+        [filters.gender, filters.category, filters.subcategory, filters.style].filter(Boolean).length +
+        filters.weblinks.filter(Boolean).length +
+        (filters.productType !== 'All Products' ? 1 : 0)
+      );
     } else {
       return [filters.region, filters.timeRange, filters.insightType, filters.marketSegment, filters.dataSource].filter(Boolean).length;
     }
   };
 
   const getActiveFiltersText = (filters: any, mode: 'stream' | 'insights') => {
-    const activeFilters = [];
+    const activeFilters: string[] = [];
     if (mode === 'stream') {
       if (filters.gender) activeFilters.push(`Gender: ${filters.gender}`);
       if (filters.category) activeFilters.push(`Category: ${filters.category}`);
       if (filters.subcategory) activeFilters.push(`Type: ${filters.subcategory}`);
       if (filters.style) activeFilters.push(`Style: ${filters.style}`);
       if (filters.productType !== 'All Products') activeFilters.push(`Product: ${filters.productType}`);
-      const activeWeblinks = filters.weblinks.filter(Boolean);
+      const activeWeblinks = (filters.weblinks || []).filter(Boolean);
       if (activeWeblinks.length > 0) activeFilters.push(`Sources: ${activeWeblinks.length} website(s)`);
     } else {
       if (filters.region) activeFilters.push(`Region: ${filters.region}`);
@@ -538,6 +436,7 @@ useEffect(() => {
     return activeFilters.join(' • ');
   };
 
+  // ---------- Render ----------
   return (
     <div className="min-h-screen pt-6">
       {/* Category Filters */}
@@ -548,43 +447,28 @@ useEffect(() => {
               key={filter}
               onClick={() => {
                 if (filter === 'Market Stream') {
-                  // If we already have search results for this mode, don't clear them
-                  if (marketSearchResults?.mode === 'stream') {
-                    setActiveFilter('Market Stream');
-                  } else {
-                    handleMarketFilterClick('stream');
-                  }
+                  if (marketSearchResults?.mode === 'stream') setActiveFilter('Market Stream');
+                  else handleMarketFilterClick('stream');
                 } else if (filter === 'Market Insights') {
-                  // If we already have search results for this mode, don't clear them
-                  if (marketSearchResults?.mode === 'insights') {
-                    setActiveFilter('Market Insights');
-                  } else {
-                    handleMarketFilterClick('insights');
-                  }
+                  if (marketSearchResults?.mode === 'insights') setActiveFilter('Market Insights');
+                  else handleMarketFilterClick('insights');
                 } else {
-                  // Clear market search results when switching to other tabs
-                  if (marketSearchResults) {
-                    setMarketSearchResults(null);
-                  }
+                  if (marketSearchResults) setMarketSearchResults(null);
                   setActiveFilter(filter);
                 }
               }}
               className={`px-4 py-2 text-[14px] font-medium rounded-lg whitespace-nowrap transition-colors duration-200 relative ${
-                activeFilter === filter
-                  ? 'text-[#F5F6F7]'
-                  : 'text-[#9CA3AF] hover:text-[#F5F6F7] hover:bg-[#1C1D20]'
+                activeFilter === filter ? 'text-[#F5F6F7]' : 'text-[#9CA3AF] hover:text-[#F5F6F7] hover:bg-[#1C1D20]'
               }`}
             >
               {filter}
-              {activeFilter === filter && (
-                <div className="absolute -bottom-1 left-4 right-4 h-0.5 bg-[#F5F6F7]"></div>
-              )}
+              {activeFilter === filter && <div className="absolute -bottom-1 left-4 right-4 h-0.5 bg-[#F5F6F7]" />}
             </button>
           ))}
         </div>
       </div>
 
-      {/* Market Search Results - Show when marketSearchResults exists */}
+      {/* Market Search Results */}
       {marketSearchResults && (
         <div className="pb-20">
           {/* Active Filters Summary */}
@@ -624,21 +508,14 @@ useEffect(() => {
 
           {/* Market Results Content */}
           {marketSearchResults.mode === 'stream' ? (
-            <MarketStreamTab 
-              onFindSimilar={onFindSimilar}
-              hideForm={true}
-              appliedFilters={marketSearchResults.filters}
-            />
+            <MarketStreamTab onFindSimilar={onFindSimilar} hideForm={true} appliedFilters={marketSearchResults.filters} />
           ) : (
-            <MarketInsightsTab 
-              hideForm={true}
-              appliedFilters={marketSearchResults.filters}
-            />
+            <MarketInsightsTab hideForm={true} appliedFilters={marketSearchResults.filters} />
           )}
         </div>
       )}
 
-      {/* Main Content Sections - shown when not in market search mode */}
+      {/* Main Content Sections */}
       {!marketSearchResults && (
         <div className="pb-20">
           {activeFilter === 'My Collection' ? (
@@ -662,7 +539,7 @@ useEffect(() => {
             setPopupAnchorRect(null);
           }}
           onAddToMyCollection={() => {
-            const currentItem = [...brandsData, ...worldReportsData, ...internalData].find(item => item.id === activePopup);
+            const currentItem = [...brandsData, ...worldReportsData, ...internalData].find((item) => item.id === activePopup);
             if (currentItem) {
               handleAddToMyCollection(currentItem);
             }
@@ -670,7 +547,7 @@ useEffect(() => {
             setPopupAnchorRect(null);
           }}
           onRecommend={() => {
-            const currentItem = [...brandsData, ...worldReportsData, ...internalData].find(item => item.id === activePopup);
+            const currentItem = [...brandsData, ...worldReportsData, ...internalData].find((item) => item.id === activePopup);
             if (currentItem) {
               handleRecommend(currentItem);
             }
