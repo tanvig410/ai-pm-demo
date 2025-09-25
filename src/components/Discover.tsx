@@ -4,6 +4,74 @@ import { AddToCollectionPopup } from './AddToCollectionPopup';
 import { MarketFilterOverlay } from './MarketFilterOverlay';
 import { MarketStreamTab } from './MarketStreamTab';
 import { MarketInsightsTab } from './MarketInsightsTab';
+const DISCOVER_WEBHOOK = import.meta.env.VITE_DISCOVER_WEBHOOK;
+const DISCOVER_API_KEY = import.meta.env.VITE_DISCOVER_API_KEY;
+useEffect(() => {
+  let cancelled = false;
+
+  async function load() {
+    try {
+      if (!DISCOVER_WEBHOOK) return; // no webhook → keep static fallback
+
+      const res = await fetch(DISCOVER_WEBHOOK, {
+        headers: DISCOVER_API_KEY ? { 'x-api-key': DISCOVER_API_KEY } : {},
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+
+      const rows = await res.json();           // expects your n8n to return an array of rows
+      const dynamic = buildBrandCardsStable(rows, 5); // no vendor restriction
+      if (!cancelled && dynamic.length) {
+        setBrandsData(padWithFallback(dynamic, STATIC_BRANDS, 5)); // always 5 cards like before
+      }
+    } catch (e) {
+      // On any error, we intentionally keep STATIC_BRANDS so the UI doesn't shift
+      console.warn('Discover: using static fallback', e);
+    }
+  }
+
+  load();
+  return () => { cancelled = true; };
+}, []);
+
+
+function titleCase(s: string) {
+  return (s || '').toLowerCase().replace(/\b\w/g, (m) => m.toUpperCase());
+}
+
+function padWithFallback<T>(primary: T[], fallback: T[], count: number) {
+  const used = new Set(primary.map((p: any) => p.id));
+  const extra = fallback.filter((f: any) => !used.has(f.id));
+  return [...primary, ...extra].slice(0, count);
+}
+
+/** Build “brand cards” from raw rows while preserving your original card look */
+function buildBrandCardsStable(rows: any[], limit = 5) {
+  const seen = new Set<string>();
+  const cards: any[] = [];
+
+  for (const r of rows) {
+    const vendor = (r.vendor ?? '').trim();
+    const url = r.image_url ?? r.primary_image_url;
+    if (!vendor || !url) continue;
+
+    const vendorKey = vendor.toLowerCase();
+    if (seen.has(vendorKey)) continue;
+    seen.add(vendorKey);
+
+    cards.push({
+      id: r.product_uid || `${vendorKey}-${r.native_product_id || Math.random()}`,
+      title: titleCase(vendor),          // ✅ Title-cased (no more all-lowercase)
+      subtitle: `@${vendorKey}`,         // same subtitle style you had
+      url,                               // keep big hero imagery as before
+      href: r.product_url || '#',
+    });
+
+    if (cards.length >= limit) break;
+  }
+
+  return cards;
+}
+
 // --- Webhook env var (Netlify: VITE_DISCOVER_WEBHOOK) ---
 // Expected n8n response: either an array of rows or { data: [...] }.
 // Each row should include: product_uid, vendor, image_url, product_url, score (optional).
@@ -142,9 +210,43 @@ export function Discover({ onFindSimilar, onImageClick, onCreateClick, onAddToMy
 
   // Sample data for different sections
  // Replace hardcoded brandsData with state that starts from fallback and hydrates from webhook
+// Static fallback (keeps your original look if API fails or returns few items)
+const STATIC_BRANDS = [
+  {
+    id: 'brand-1',
+    title: 'Zara',
+    subtitle: '@zara',
+    url: 'https://static.zara.net/assets/public/74d8/7667/80d5487a82ba/54ab16af7b49/05029172330-p/05029172330-p.jpg?ts=1753515381675&w=1254',
+  },
+  {
+    id: 'brand-2',
+    title: 'Forever New',
+    subtitle: '@ForeverNew',
+    url: 'https://www.forevernew.co.in//pub/media/catalog/product/o/l/oldimlall_onbody_29521504_f.jpg?width=1046&height=1118&store=default&image-type=image',
+  },
+  {
+    id: 'brand-3',
+    title: 'Zara Collection',
+    subtitle: '@zara',
+    url: 'https://static.zara.net/assets/public/6203/dce9/d388499f97fb/e29f128674bf/08460501700-p/08460501700-p.jpg?ts=1753438567193&w=1254',
+  },
+  {
+    id: 'brand-4',
+    title: 'Uniqlo Basics',
+    subtitle: '@uniqlo',
+    url: 'https://static.zara.net/assets/public/45f6/3c46/9c5a498c9763/4fa6a6e7d499/04047476800-p/04047476800-p.jpg?ts=1732265080529&w=1440',
+  },
+  {
+    id: 'brand-5',
+    title: 'H&M Trends',
+    subtitle: '@hm',
+    url: 'https://image.hm.com/assets/hm/3a/d8/3ad8fc6726aac2101afb6767b6d06a07787256a7.jpg?imwidth=1536',
+  },
+];
 
-  const [brandsData, setBrandsData] = useState<any[]>(fallbackBrands);
+const [brandsData, setBrandsData] = useState(STATIC_BRANDS);
 
+  
 useEffect(() => {
   let cancelled = false;
   (async () => {
