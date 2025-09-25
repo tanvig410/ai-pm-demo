@@ -1,9 +1,98 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { Plus, Filter, Edit2, X } from 'lucide-react';
 import { AddToCollectionPopup } from './AddToCollectionPopup';
 import { MarketFilterOverlay } from './MarketFilterOverlay';
 import { MarketStreamTab } from './MarketStreamTab';
 import { MarketInsightsTab } from './MarketInsightsTab';
+// --- Webhook env var (Netlify: VITE_DISCOVER_WEBHOOK) ---
+// Expected n8n response: either an array of rows or { data: [...] }.
+// Each row should include: product_uid, vendor, image_url, product_url, score (optional).
+async function fetchDiscoverRows(): Promise<any[]> {
+  const url = import.meta.env.VITE_DISCOVER_WEBHOOK;
+  if (!url) {
+    console.warn('VITE_DISCOVER_WEBHOOK not set; using fallback data.');
+    return [];
+  }
+
+  const res = await fetch(url, { headers: { Accept: 'application/json' } });
+  if (!res.ok) throw new Error(`Webhook error: ${res.status} ${res.statusText}`);
+
+  const payload = await res.json();
+  const rows = Array.isArray(payload) ? payload : (payload?.data ?? []);
+  return rows;
+}
+
+// Build your “brand tiles” (same shape your UI already expects)
+function buildBrandCards(rows: any[], opts?: { limit?: number; vendors?: string[]; minScore?: number }) {
+  const limit = opts?.limit ?? 5;
+  const vendors = (opts?.vendors ?? []).map(v => v.toLowerCase());
+  const minScore = opts?.minScore ?? 0;
+
+  const filtered = rows.filter(r => {
+    const vendorOk = vendors.length ? vendors.includes((r.vendor ?? '').toLowerCase()) : true;
+    const scoreOk = (r.score ?? 0) >= minScore;
+    return vendorOk && scoreOk && !!r.vendor && !!r.image_url;
+  });
+
+  // group by vendor and keep the highest score
+  const byVendor = new Map<string, any[]>();
+  filtered.forEach(r => {
+    const key = r.vendor as string;
+    if (!byVendor.has(key)) byVendor.set(key, []);
+    byVendor.get(key)!.push(r);
+  });
+
+  const cards: any[] = [];
+  for (const [vendor, items] of byVendor.entries()) {
+    const top = items.sort((a, b) => (b.score ?? 0) - (a.score ?? 0))[0];
+    if (top?.image_url) {
+      cards.push({
+        id: top.product_uid || `${vendor}-${Date.now()}`,
+        title: vendor,
+        subtitle: `@${(vendor || '').toLowerCase()}`,
+        url: top.image_url,
+        // optional: click-through
+        href: top.product_url || '#',
+      });
+    }
+  }
+
+  return cards.slice(0, limit);
+}
+
+// Fallback to keep page looking good if webhook fails
+const fallbackBrands = [
+  {
+    id: 'brand-1',
+    title: 'Zara',
+    subtitle: '@zara',
+    url: 'https://static.zara.net/assets/public/74d8/7667/80d5487a82ba/54ab16af7b49/05029172330-p/05029172330-p.jpg?ts=1753515381675&w=1254',
+  },
+  {
+    id: 'brand-2',
+    title: 'Forever New',
+    subtitle: '@ForeverNew',
+    url: 'https://www.forevernew.co.in//pub/media/catalog/product/o/l/oldimlall_onbody_29521504_f.jpg?width=1046&height=1118&store=default&image-type=image',
+  },
+  {
+    id: 'brand-3',
+    title: 'Zara Collection',
+    subtitle: '@zara',
+    url: 'https://static.zara.net/assets/public/6203/dce9/d388499f97fb/e29f128674bf/08460501700-p/08460501700-p.jpg?ts=1753438567193&w=1254',
+  },
+  {
+    id: 'brand-4',
+    title: 'Uniqlo Basics',
+    subtitle: '@uniqlo',
+    url: 'https://static.zara.net/assets/public/45f6/3c46/9c5a498c9763/4fa6a6e7d499/04047476800-p/04047476800-p.jpg?ts=1732265080529&w=1440',
+  },
+  {
+    id: 'brand-5',
+    title: 'H&M Trends',
+    subtitle: '@hm',
+    url: 'https://image.hm.com/assets/hm/3a/d8/3ad8fc6726aac2101afb6767b6d06a07787256a7.jpg?imwidth=1536',
+  },
+];
 
 interface DiscoverProps {
   onFindSimilar: (imageId: string) => void;
@@ -34,38 +123,34 @@ export function Discover({ onFindSimilar, onImageClick, onCreateClick, onAddToMy
   ];
 
   // Sample data for different sections
-  const brandsData = [
-    {
-      id: 'brand-1',
-      title: 'Zara',
-      subtitle: '@zara',
-      url: 'https://static.zara.net/assets/public/74d8/7667/80d5487a82ba/54ab16af7b49/05029172330-p/05029172330-p.jpg?ts=1753515381675&w=1254',
-    },
-    {
-      id: 'brand-2',
-      title: 'Forever New',
-      subtitle: '@ForeverNew',
-      url: 'https://www.forevernew.co.in//pub/media/catalog/product/o/l/oldimlall_onbody_29521504_f.jpg?width=1046&height=1118&store=default&image-type=image',
-    },
-    {
-      id: 'brand-3',
-      title: 'Zara Collection',
-      subtitle: '@zara',
-      url: 'https://static.zara.net/assets/public/6203/dce9/d388499f97fb/e29f128674bf/08460501700-p/08460501700-p.jpg?ts=1753438567193&w=1254',
-    },
-    {
-      id: 'brand-4',
-      title: 'Uniqlo Basics',
-      subtitle: '@uniqlo',
-      url: 'https://static.zara.net/assets/public/45f6/3c46/9c5a498c9763/4fa6a6e7d499/04047476800-p/04047476800-p.jpg?ts=1732265080529&w=1440',
-    },
-    {
-      id: 'brand-5',
-      title: 'H&M Trends',
-      subtitle: '@hm',
-      url: 'https://image.hm.com/assets/hm/3a/d8/3ad8fc6726aac2101afb6767b6d06a07787256a7.jpg?imwidth=1536',
-    },
-  ];
+ // Replace hardcoded brandsData with state that starts from fallback and hydrates from webhook
+
+  const [brandsData, setBrandsData] = useState<any[]>(fallbackBrands);
+
+useEffect(() => {
+  let cancelled = false;
+  (async () => {
+    try {
+      const rows = await fetchDiscoverRows();
+
+      // You control what appears:
+      //   - limit the number of tiles
+      //   - force particular vendors
+      //   - require a score threshold
+      const cards = buildBrandCards(rows, {
+        limit: 5,
+        // vendors: ['Zara', 'H&M'],
+        // minScore: 80,
+      });
+
+      if (!cancelled && cards.length) setBrandsData(cards);
+    } catch (e) {
+      console.error('Discover webhook failed:', e);
+      // keep fallback on error
+    }
+  })();
+  return () => { cancelled = true; };
+}, []);
 
   const worldReportsData = [
     {
