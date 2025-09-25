@@ -6,18 +6,6 @@ import { MarketFilterOverlay } from './MarketFilterOverlay';
 import { MarketStreamTab } from './MarketStreamTab';
 import { MarketInsightsTab } from './MarketInsightsTab';
 
-
-  // ---- Dynamic Brands with safe fallback ----
-  const [brandsData, setBrandsData] = useState<BrandCard[]>(STATIC_BRANDS);
-
-import { useEffect, useState } from 'react';
-
-const DISCOVER_WEBHOOK = import.meta.env.VITE_DISCOVER_WEBHOOK;
-const DISCOVER_API_KEY = import.meta.env.VITE_DISCOVER_API_KEY;
-
-export function Discover({ /* props */ }) {
-  const [brandsData, setBrandsData] = useState([]);
-
 // ---------- Config (via Vite / Netlify envs) ----------
 
 
@@ -161,45 +149,50 @@ export function Discover({
     'Market Insights',
   ];
 
+  // ---- Dynamic Brands with safe fallback ----
+  const [brandsData, setBrandsData] = useState<BrandCard[]>(STATIC_BRANDS);
 
+  
+// ---- Replace the entire second useEffect with this one ----
+useEffect(() => {
+  let cancelled = false;
+  (async () => {
+    try {
+      const rows = await fetchDiscoverRows();
 
-  useEffect(() => {
-    let cancelled = false;
+      // 👉 Expose all fetched rows for the modal (lookup by product_uid)
+      (window as any).__DISCOVER_MAP__ = new Map(
+        rows.map((r: any) => [r.product_uid || r.native_product_id, r])
+      );
 
-    async function load() {
-      try {
-        if (!DISCOVER_WEBHOOK) return; // No webhook, keep static fallback
+      const MAX_TILES = 12;
+      const MIN_SCORE = 0;
+      const REQUIRE_FIELDS = ['image_url', 'product_url'];
 
-        const res = await fetch(DISCOVER_WEBHOOK, {
-          headers: DISCOVER_API_KEY ? { 'x-api-key': DISCOVER_API_KEY } : {},
-        });
+      const filtered = rows
+        .filter((r: any) =>
+          REQUIRE_FIELDS.every((f) => r?.[f]) && (r.score ?? 0) >= MIN_SCORE
+        )
+        .sort((a: any, b: any) => (b.score ?? 0) - (a.score ?? 0))
+        .slice(0, MAX_TILES);
 
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        
-        const rows = await res.json();
-        console.log('Fetched Rows:', rows);  // **Logging data**
+      const cards = filtered.map((r: any, i: number) => ({
+        id: r.product_uid || r.native_product_id || `row-${i}`,
+        title: titleCase(r.vendor || 'Unknown'),
+        subtitle: `@${(r.vendor || '').toLowerCase()}`,
+        url: r.image_url || r.primary_image_url,
+        href: r.product_url || '#',
+      }));
 
-        const dynamic = buildBrandCardsStable(rows, 5);  // Process data
-        console.log('Processed Dynamic Cards:', dynamic);  // **Logging processed data**
-
-        if (!cancelled && dynamic.length) {
-          setBrandsData(dynamic);
-        }
-      } catch (e) {
-        console.warn('Discover: using static fallback', e);
+      if (!cancelled && cards.length) {
+        setBrandsData(cards);
       }
+    } catch (e) {
+      console.error('Discover webhook failed:', e);
     }
-
-    load();
-    return () => { cancelled = true; };
-  }, []);
-
-  return (
-    <div>
-      {/* Rest of your code */}
-    </div>
-  );
-}
+  })();
+  return () => { cancelled = true; };
+}, []);
 
 
   // ---------- Other static sections (unchanged) ----------
