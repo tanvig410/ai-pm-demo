@@ -156,13 +156,9 @@ useEffect(() => {
       //   - force particular vendors
       //   - require a score threshold
       const cards = buildBrandCards(rows, {
-        limit: 5,
+        limit: 10,
         vendors: ['Zara', 'hm'],
-        minScore: 80,
-        midjourney_prompt: not null,
-        limit: 10
-
-      });
+        minScore: 80      });
 
       if (!cancelled && cards.length) setBrandsData(cards);
     } catch (e) {
