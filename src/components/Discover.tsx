@@ -7,8 +7,7 @@ import { MarketStreamTab } from './MarketStreamTab';
 import { MarketInsightsTab } from './MarketInsightsTab';
 
 // ---------- Config (via Vite / Netlify envs) ----------
-const DISCOVER_WEBHOOK = import.meta.env.VITE_DISCOVER_WEBHOOK as string | undefined;
-const DISCOVER_API_KEY = import.meta.env.VITE_DISCOVER_API_KEY as string | undefined;
+
 
 // ---------- Helpers (safe, no runtime crashes) ----------
 type BrandCard = { id: string; title: string; subtitle: string; url: string; href?: string };
@@ -153,24 +152,49 @@ export function Discover({
   // ---- Dynamic Brands with safe fallback ----
   const [brandsData, setBrandsData] = useState<BrandCard[]>(STATIC_BRANDS);
 
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      try {
-        const rows = await fetchDiscoverRows();
-        const cards = buildBrandCardsStable(rows, 5); // keep 5 tiles like your original UI
-        if (!cancelled && cards.length) {
-          setBrandsData(padWithFallback(cards, STATIC_BRANDS, 5));
-        }
-      } catch (err) {
-        console.warn('Discover dynamic load failed → using fallback', err);
-        // keep STATIC_BRANDS
+  
+// ---- Replace the entire second useEffect with this one ----
+useEffect(() => {
+  let cancelled = false;
+
+  (async () => {
+    try {
+      const rows = await fetchDiscoverRows();
+
+      // Adjust these knobs as you like
+      const MAX_TILES = 12;     // how many cards you want to render
+      const MIN_SCORE = 0;      // e.g. 60 if you only want higher-score picks
+      const REQUIRE_FIELDS = ['image_url', 'product_url']; // must exist
+
+      // Pick top N by score across ALL vendors (no de-dupe)
+      const filtered = rows
+        .filter((r: any) =>
+          REQUIRE_FIELDS.every((f) => r?.[f]) &&
+          (r.score ?? 0) >= MIN_SCORE
+        )
+        .sort((a: any, b: any) => (b.score ?? 0) - (a.score ?? 0))
+        .slice(0, MAX_TILES);
+
+      const cards = filtered.map((r: any, i: number) => ({
+        id: r.product_uid || r.native_product_id || `row-${i}`,
+        title: titleCase(r.vendor || 'Unknown'),
+        subtitle: `@${(r.vendor || '').toLowerCase()}`,
+        url: r.image_url || r.primary_image_url,
+        href: r.product_url || '#',
+      }));
+
+      if (!cancelled && cards.length) {
+        setBrandsData(cards);
       }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, []);
+    } catch (e) {
+      console.error('Discover webhook failed:', e);
+      // keep fallback on error
+    }
+  })();
+
+  return () => { cancelled = true; };
+}, []);
+
 
   // ---------- Other static sections (unchanged) ----------
   const worldReportsData = [
