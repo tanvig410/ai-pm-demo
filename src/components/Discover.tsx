@@ -23,20 +23,38 @@ async function fetchDiscoverRows(): Promise<any[]> {
 }
 
 // Build your “brand tiles” (same shape your UI already expects)
-function buildBrandCards(rows: any[], opts?: { limit?: number; vendors?: string[]; minScore?: number }) {
+function buildBrandCards(
+  rows: any[],
+  opts?: {
+    limit?: number;
+    vendors?: string[];
+    minScore?: number;
+    requiredFields?: string[]; // NEW
+  }
+) {
   const limit = opts?.limit ?? 5;
-  const vendors = (opts?.vendors ?? []).map(v => v.toLowerCase());
+  const vendorsList = (opts?.vendors ?? []).map((v) => v.toLowerCase());
   const minScore = opts?.minScore ?? 0;
+  const requiredFields = opts?.requiredFields ?? []; // NEW
 
-  const filtered = rows.filter(r => {
-    const vendorOk = vendors.length ? vendors.includes((r.vendor ?? '').toLowerCase()) : true;
+  const filtered = rows.filter((r) => {
+    const vendorOk = vendorsList.length
+      ? vendorsList.includes((r.vendor ?? '').toLowerCase())
+      : true;
     const scoreOk = (r.score ?? 0) >= minScore;
-    return vendorOk && scoreOk && !!r.vendor && !!r.image_url;
+
+    // all required fields must be present and non-empty
+    const fieldsOk = requiredFields.every((f) => {
+      const v = r?.[f];
+      return v !== null && v !== undefined && String(v).trim() !== '';
+    });
+
+    return vendorOk && scoreOk && fieldsOk && !!r.vendor && !!r.image_url;
   });
 
-  // group by vendor and keep the highest score
+  // group by vendor and keep the highest-scored item per vendor
   const byVendor = new Map<string, any[]>();
-  filtered.forEach(r => {
+  filtered.forEach((r) => {
     const key = r.vendor as string;
     if (!byVendor.has(key)) byVendor.set(key, []);
     byVendor.get(key)!.push(r);
@@ -51,7 +69,6 @@ function buildBrandCards(rows: any[], opts?: { limit?: number; vendors?: string[
         title: vendor,
         subtitle: `@${(vendor || '').toLowerCase()}`,
         url: top.image_url,
-        // optional: click-through
         href: top.product_url || '#',
       });
     }
@@ -59,6 +76,7 @@ function buildBrandCards(rows: any[], opts?: { limit?: number; vendors?: string[
 
   return cards.slice(0, limit);
 }
+
 
 // Fallback to keep page looking good if webhook fails
 const fallbackBrands = [
