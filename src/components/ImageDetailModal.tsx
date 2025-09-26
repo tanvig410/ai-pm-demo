@@ -215,76 +215,78 @@ export function ImageDetailModal({ isOpen, onClose, image, onFindSimilar }: Imag
       {/* Modal */}
       <div ref={modalRef} className="relative w-full h-full flex">
 
-        
-     {/* LEFT: fixed-height, centered media stage with responsive layouts */}
+    {/* LEFT: fixed-height, centered media stage */}
 <div className="flex-1 overflow-y-auto p-8">
   <div className="w-full flex items-center justify-center">
-    {/* Fixed-height stage — tune once and everything inside obeys it */}
-    <div className="w-full max-w-[980px]">
-      {/* one fixed value controls the overall presence */}
-      <div className="mx-auto h-[36vh] max-h-[860px] flex items-center justify-center">
-        {images.length <= 1 ? (
-          /* ===== 1 IMAGE ===== */
-          <div className="aspect-[3/4] h-full bg-[#1C1D20] border border-[#2A2B2E] overflow-hidden">
-            <ImageWithFallback
-              src={images[0]}
-              alt={row?.title || row?.name || image.alt || 'product'}
-              className="w-full h-full object-contain block"
-            />
-          </div>
-        ) : images.length === 2 ? (
-          /* ===== 2 IMAGES (side-by-side) ===== */
-          <div className="flex gap-4 items-center justify-center h-full">
-            {images.slice(0, 2).map((src, i) => (
-              <div
-                key={`${src}-${i}`}
-                className="aspect-[3/4] h-full bg-[#1C1D20] border border-[#2A2B2E] overflow-hidden"
-              >
+    {/* 👉 this is the ONLY knob: change h-[68vh]/max-h to control stage size */}
+    <div id="media-stage" className="w-full max-w-[980px] h-[68vh] max-h-[840px]">
+      {(() => {
+        const n = Math.min(images.length, 4);
+        const cols = n === 1 ? 1 : 2;
+        const rows = n <= 2 ? 1 : 2;
+
+        if (n === 1) {
+          // One image, centered, no cropping
+          return (
+            <div className="h-full flex items-center justify-center bg-transparent">
+              <div className="h-full bg-[#1C1D20] border border-[#2A2B2E] overflow-hidden flex items-center justify-center">
                 <ImageWithFallback
-                  src={src}
-                  alt={(row?.title || row?.name || image.alt || 'image') + ` ${i + 1}`}
-                  className="w-full h-full object-cover block"
+                  src={images[0]}
+                  alt={row?.title || row?.name || image.alt || 'product'}
+                  className="h-full w-auto object-contain block"
                 />
               </div>
-            ))}
-          </div>
-        ) : (
-          /* ===== 3 or 4 IMAGES (grid with fixed rows) ===== */
-          <div
-            className="grid gap-4 h-full w-full place-content-center"
-            style={{
-              gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', // 2 columns
-              gridTemplateRows: 'repeat(2, 1fr)',                // 2 rows of equal height
-            }}
-          >
+            </div>
+          );
+        }
+
+        if (n === 2) {
+          // Two images side-by-side, same fixed stage height
+          return (
+            <div className="h-full grid gap-4"
+                 style={{ gridTemplateColumns: 'repeat(2, minmax(0, 1fr))' }}>
+              {images.slice(0, 2).map((src, i) => (
+                <div key={`${src}-${i}`}
+                     className="h-full bg-[#1C1D20] border border-[#2A2B2E] overflow-hidden flex items-center justify-center">
+                  <ImageWithFallback
+                    src={src}
+                    alt={(row?.title || row?.name || image.alt || 'image') + ` ${i + 1}`}
+                    className="h-full w-auto object-cover block"
+                  />
+                </div>
+              ))}
+            </div>
+          );
+        }
+
+        // 3 or 4 images → fixed 2×2 grid; with 3 items the last row has a single cell (no placeholder)
+        return (
+          <div className="h-full grid gap-4"
+               style={{
+                 gridTemplateColumns: 'repeat(2, minmax(0, 1fr))',
+                 gridTemplateRows:    'repeat(2, 1fr)',
+                 placeItems:          'center'
+               }}>
             {images.slice(0, 4).map((src, i) => (
-              <div
-                key={`${src}-${i}`}
-                className="justify-self-center aspect-[3/4] h-full bg-[#1C1D20] border border-[#2A2B2E] overflow-hidden"
-              >
+              <div key={`${src}-${i}`}
+                   className="h-full w-full bg-[#1C1D20] border border-[#2A2B2E] overflow-hidden flex items-center justify-center">
                 <ImageWithFallback
                   src={src}
                   alt={(row?.title || row?.name || image.alt || 'image') + ` ${i + 1}`}
-                  className="w-full h-full object-cover block"
+                  className="h-full w-auto object-cover block"
                 />
               </div>
             ))}
-            {/* With 3 images, only three cells render. The fourth cell stays empty
-                (no placeholder), so you get two on the first row and one centered
-                on the second row. */}
           </div>
-        )}
-      </div>
+        );
+      })()}
     </div>
   </div>
 
-  {/* Similar button sits outside the stage; keeps the stage height clean */}
+  {/* Similar button */}
   <div className="mt-6 flex justify-center">
     <button
-      onClick={() => {
-        onFindSimilar(image.id);
-        onClose();
-      }}
+      onClick={() => { onFindSimilar(image.id); onClose(); }}
       className="flex items-center gap-2 px-4 py-2 bg-[#1C1D20] hover:bg-[#2A2B2E] border border-[#2A2B2E] text-[#F5F6F7] transition-colors"
     >
       <span className="text-[14px] font-medium">Similar</span>
@@ -292,6 +294,7 @@ export function ImageDetailModal({ isOpen, onClose, image, onFindSimilar }: Imag
     </button>
   </div>
 </div>
+
 
 
 
