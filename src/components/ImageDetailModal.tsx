@@ -5,20 +5,15 @@ import { ImageWithFallback } from './figma/ImageWithFallback';
 interface ImageDetailModalProps {
   isOpen: boolean;
   onClose: () => void;
-  image: {
-    id: string;
-    url: string;
-    alt: string;
-  };
+  image: { id: string; url: string; alt: string };
   onFindSimilar: (imageId: string) => void;
 }
 
-// --- helpers ---------------------------------------------------------------
+/* -------- helpers -------- */
 function normalizeList(v: any): string[] {
   if (!v) return [];
   if (Array.isArray(v)) return v.map(String).filter(Boolean);
   if (typeof v === 'string') {
-    // supports comma/pipe separated lists
     return v
       .split(/[,\|\n]/)
       .map(s => s.trim())
@@ -26,50 +21,41 @@ function normalizeList(v: any): string[] {
   }
   return [];
 }
+const uniq = <T,>(arr: T[]) => Array.from(new Set(arr));
 
-function unique<T>(arr: T[]): T[] {
-  return Array.from(new Set(arr));
-}
-
-// --------------------------------------------------------------------------
 export function ImageDetailModal({ isOpen, onClose, image, onFindSimilar }: ImageDetailModalProps) {
   const modalRef = useRef<HTMLDivElement>(null);
 
-  // Pull the raw row we cached on the Discover page (if present)
+  // Pull the raw scraped row saved by Discover (if available)
   const row = useMemo(() => {
     const map: Map<string, any> | undefined = (window as any).__DISCOVER_MAP__;
     return map?.get(image?.id) ?? null;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [image?.id, isOpen]);
 
-  // Build the image list (max 4). Always include the main image first.
+  // Build the portrait image list (max 4). ALWAYS include clicked image first.
   const imgs = useMemo(() => {
-    const primary =
-      row?.image_url ||
-      row?.primary_image_url ||
-      image?.url;
+    const primary = image?.url || row?.image_url || row?.primary_image_url;
 
-    const more =
-      normalizeList(row?.image_urls)
-        .concat(normalizeList(row?.images))
-        .concat(normalizeList(row?.additional_images));
+    const more = [
+      ...normalizeList(row?.image_urls),
+      ...normalizeList(row?.images),
+      ...normalizeList(row?.additional_images),
+    ];
 
-    const all = unique([primary, ...more].filter(Boolean));
-    return all.slice(0, 4);
+    const all = uniq([primary, ...more].filter(Boolean));
+    // never render blanks; if nothing, still return [image.url]
+    return (all.length ? all : [image?.url]).slice(0, 4);
   }, [row, image?.url]);
 
   useEffect(() => {
-    const handleEscape = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose();
-    };
-
+    const onEsc = (e: KeyboardEvent) => e.key === 'Escape' && onClose();
     if (isOpen) {
-      document.addEventListener('keydown', handleEscape);
+      document.addEventListener('keydown', onEsc);
       document.body.style.overflow = 'hidden';
     }
-
     return () => {
-      document.removeEventListener('keydown', handleEscape);
+      document.removeEventListener('keydown', onEsc);
       document.body.style.overflow = 'auto';
     };
   }, [isOpen, onClose]);
@@ -86,14 +72,23 @@ export function ImageDetailModal({ isOpen, onClose, image, onFindSimilar }: Imag
       {/* Backdrop */}
       <div className="absolute inset-0 bg-[#0E0E11]" onClick={onClose} />
 
-      {/* Modal Content */}
+      {/* Modal */}
       <div ref={modalRef} className="relative w-full h-full flex">
-        {/* LEFT: Portrait image grid (no blanks, no labels) */}
-        <div className="flex-1 flex items-center justify-start p-8">
-          <div className={`w-full ${imgs.length === 1 ? 'max-w-[560px]' : 'max-w-[1100px]'} mx-0`}>
-            <div className={`grid gap-4 ${imgs.length >= 2 ? 'grid-cols-2' : 'grid-cols-1'}`}>
+        {/* LEFT: strict portrait grid, padded, no labels, no blanks */}
+        <div className="flex-1 flex items-start justify-start p-8">
+          <div className="w-full max-w-[1200px]">
+            <div
+              className={
+                imgs.length > 1
+                  ? 'grid grid-cols-2 gap-6'
+                  : 'grid grid-cols-1 gap-6'
+              }
+            >
               {imgs.map((src, i) => (
-                <div key={i} className="relative w-full aspect-[3/4] border border-[#2A2B2E] overflow-hidden">
+                <div
+                  key={`${src}-${i}`}
+                  className="relative w-full aspect-[3/4] border border-[#2A2B2E] overflow-hidden"
+                >
                   <ImageWithFallback
                     src={src}
                     alt={`${image?.alt || 'Image'} ${i + 1}`}
@@ -104,7 +99,7 @@ export function ImageDetailModal({ isOpen, onClose, image, onFindSimilar }: Imag
             </div>
 
             {/* Similar Button */}
-            <div className="mt-6 flex">
+            <div className="mt-6">
               <button
                 onClick={handleSimilarClick}
                 className="flex items-center gap-2 px-4 py-2 bg-[#1C1D20] hover:bg-[#2A2B2E] border border-[#2A2B2E] text-[#F5F6F7] transition-colors"
@@ -116,7 +111,7 @@ export function ImageDetailModal({ isOpen, onClose, image, onFindSimilar }: Imag
           </div>
         </div>
 
-        {/* RIGHT: Details panel (kept exactly as your UI) */}
+        {/* RIGHT: your existing details panel (unchanged UI) */}
         <div className="w-[360px] bg-[#0E0E11] border-l border-[#1C1D20] flex flex-col">
           <div className="flex-1 overflow-y-auto">
             <div className="p-6 space-y-6" style={{ fontFamily: 'Inter, system-ui, sans-serif' }}>
@@ -192,16 +187,10 @@ export function ImageDetailModal({ isOpen, onClose, image, onFindSimilar }: Imag
 
               {/* 7. CTAs */}
               <div className="flex flex-col gap-3 pt-2">
-                <button
-                  className="w-full px-4 py-3 bg-[#1C1D20] hover:bg-[#2A2B2E] border border-[#2A2B2E] hover:border-[#3A3B3E] text-[#F5F6F7] transition-colors text-[14px] text-center"
-                  style={{ fontWeight: 500 }}
-                >
+                <button className="w-full px-4 py-3 bg-[#1C1D20] hover:bg-[#2A2B2E] border border-[#2A2B2E] hover:border-[#3A3B3E] text-[#F5F6F7] transition-colors text-[14px] text-center" style={{ fontWeight: 500 }}>
                   Generate AI Techpack
                 </button>
-                <button
-                  className="w-full px-4 py-3 bg-[#1C1D20] hover:bg-[#2A2B2E] border border-[#2A2B2E] hover:border-[#3A3B3E] text-[#F5F6F7] transition-colors text-[14px] text-center"
-                  style={{ fontWeight: 500 }}
-                >
+                <button className="w-full px-4 py-3 bg-[#1C1D20] hover:bg-[#2A2B2E] border border-[#2A2B2E] hover:border-[#3A3B3E] text-[#F5F6F7] transition-colors text-[14px] text-center" style={{ fontWeight: 500 }}>
                   Add to Collection
                 </button>
               </div>
@@ -209,7 +198,7 @@ export function ImageDetailModal({ isOpen, onClose, image, onFindSimilar }: Imag
           </div>
         </div>
 
-        {/* Close Button */}
+        {/* Close */}
         <button
           onClick={onClose}
           className="absolute top-6 left-6 w-8 h-8 rounded-full bg-[#1C1D20] hover:bg-[#2A2B2E] border border-[#2A2B2E] flex items-center justify-center text-[#F5F6F7] transition-colors z-10"
