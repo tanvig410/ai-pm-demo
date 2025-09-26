@@ -219,7 +219,7 @@ export function ImageDetailModal({ isOpen, onClose, image, onFindSimilar }: Imag
 <div className="flex-1 overflow-y-auto p-8">
   <div className="w-full flex items-center justify-center">
     {/* 👉 this is the ONLY knob: change h-[68vh]/max-h to control stage size */}
-    <div id="media-stage" className="w-full max-w-[980px] h-[68vh] max-h-[840px]">
+    <div id="media-stage" className="w-full max-w-[980px] h-[60vh] max-h-[840px]">
       {(() => {
         const n = Math.min(images.length, 4);
         const cols = n === 1 ? 1 : 2;
