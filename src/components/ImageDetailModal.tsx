@@ -214,16 +214,18 @@ export function ImageDetailModal({ isOpen, onClose, image, onFindSimilar }: Imag
 
       {/* Modal */}
       <div ref={modalRef} className="relative w-full h-full flex">
-      {/* Left: portrait layout — single vs grid */}
-<div className="flex-1 p-8">
-  <div className="w-full max-w-[920px]">
+
+        
+     {/* Left: portrait layout — scrollable, single vs grid */}
+<div className="flex-1 p-8 overflow-y-auto">
+  <div className="w-full max-w-[980px]">
     {images.length <= 1 ? (
-      // SINGLE: a fixed portrait box, image never cropped
-      <div className="bg-[#1C1D20] border border-[#2A2B2E] aspect-[3/4] w-full max-w-[640px] overflow-hidden">
+      // SINGLE: lock to portrait and cap height to viewport so it never overflows
+      <div className="bg-[#1C1D20] border border-[#2A2B2E] overflow-hidden aspect-[3/4] h-[calc(100vh-160px)] max-h-[calc(100vh-160px)]">
         <ImageWithFallback
           src={images[0]}
           alt={row?.title || row?.name || image.alt || 'product'}
-          className="w-full h-full object-contain"
+          className="w-full h-full object-contain block"
         />
       </div>
     ) : (
@@ -232,22 +234,25 @@ export function ImageDetailModal({ isOpen, onClose, image, onFindSimilar }: Imag
         {images.slice(0, 4).map((src, i) => (
           <div
             key={`${src}-${i}`}
-            className="bg-[#1C1D20] border border-[#2A2B2E] aspect-[3/4] overflow-hidden"
+            className="bg-[#1C1D20] border border-[#2A2B2E] overflow-hidden aspect-[3/4]"
           >
             <ImageWithFallback
               src={src}
               alt={(row?.title || row?.name || image.alt || 'image') + ` ${i + 1}`}
-              className="w-full h-full object-cover"
+              className="w-full h-full object-cover block"
             />
           </div>
         ))}
       </div>
     )}
 
-    {/* Similar button (kept simple, left-aligned under content) */}
+    {/* Similar button (sits below content; left pane can scroll) */}
     <div className="mt-6">
       <button
-        onClick={handleSimilarClick}
+        onClick={() => {
+          onFindSimilar(image.id);
+          onClose();
+        }}
         className="flex items-center gap-2 px-4 py-2 bg-[#1C1D20] hover:bg-[#2A2B2E] border border-[#2A2B2E] text-[#F5F6F7] transition-colors"
       >
         <span className="text-[14px] font-medium">Similar</span>
