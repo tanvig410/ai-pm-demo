@@ -52,20 +52,62 @@ function buildBrandCardsStable(rows: any[], limit = 5): BrandCard[] {
   return cards;
 }
 
-/** Fetch rows from n8n webhook. Accepts array or { data: [...] } */
+/** Fetch rows from n8n webhook. Logs everything for Preview debugging. */
 async function fetchDiscoverRows(): Promise<any[]> {
-  const url = import.meta.env.VITE_DISCOVER_WEBHOOK;
+  const url = import.meta.env.VITE_DISCOVER_WEBHOOK as string | undefined;
+
+  // Log what Vite injected for this build
+  console.log('[Discover] VITE_DISCOVER_WEBHOOK =', url);
+
   if (!url) {
-    console.warn('VITE_DISCOVER_WEBHOOK not set; using fallback data.');
+    console.warn('[Discover] No webhook env set; returning [] and keeping fallback.');
     return [];
   }
 
-  // Simple GET, no custom headers → no preflight
-  const res = await fetch(url, { method: 'GET', mode: 'cors' });
-  if (!res.ok) throw new Error(`Webhook error: ${res.status} ${res.statusText}`);
+  // Add cache-buster so Netlify/CDN can’t hand you an old response
+  const cacheBusted = url + (url.includes('?') ? '&' : '?') + 't=' + Date.now();
 
-  // Your n8n Respond node is returning an array
-  return await res.json();
+  try {
+    const res = await fetch(cacheBusted, {
+      method: 'GET',
+      mode: 'cors',
+      credentials: 'omit',
+      headers: { Accept: 'application/json' },
+    });
+
+    console.log(
+      '[Discover] fetch → status:',
+      res.status,
+      'type:',
+      res.type,
+      'content-type:',
+      res.headers.get('content-type')
+    );
+
+    if (!res.ok) {
+      throw new Error(`Webhook HTTP ${res.status} ${res.statusText}`);
+    }
+
+    // Try to parse JSON (surface parse errors clearly)
+    let payload: any;
+    try {
+      payload = await res.json();
+    } catch (e) {
+      console.error('[Discover] JSON parse failed:', e);
+      throw e;
+    }
+
+    const rows: any[] = Array.isArray(payload) ? payload : payload?.data ?? [];
+    console.log('[Discover] rows length:', rows.length);
+    if (rows.length) {
+      console.log('[Discover] sample row:', rows[0]);
+    }
+    return rows;
+  } catch (err) {
+    console.error('[Discover] fetch failed:', err);
+    // Re-throw so caller can decide to keep fallback
+    throw err;
+  }
 }
 
 
@@ -156,14 +198,6 @@ export function Discover({
 // ---- Replace the entire second useEffect with this one ----
 useEffect(() => {
   let cancelled = false;
-  (async () => {
-    try {
-      const rows = await fetchDiscoverRows();
-
-      // 👉 Expose all fetched rows for the modal (lookup by product_uid)
-      (window as any).__DISCOVER_MAP__ = new Map(
-        rows.map((r: any) => [r.product_uid || r.native_product_id, r])
-      );
 
       const MAX_TILES = 12;
       const MIN_SCORE = 0;
