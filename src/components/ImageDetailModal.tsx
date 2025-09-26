@@ -214,50 +214,49 @@ export function ImageDetailModal({ isOpen, onClose, image, onFindSimilar }: Imag
 
       {/* Modal */}
       <div ref={modalRef} className="relative w-full h-full flex">
-        {/* Left: Portrait image grid (2×2, no headers, no placeholders) */}
-        <div className="flex-1 p-6">
+      {/* Left: portrait layout — single vs grid */}
+<div className="flex-1 p-8">
+  <div className="w-full max-w-[920px]">
+    {images.length <= 1 ? (
+      // SINGLE: a fixed portrait box, image never cropped
+      <div className="bg-[#1C1D20] border border-[#2A2B2E] aspect-[3/4] w-full max-w-[640px] overflow-hidden">
+        <ImageWithFallback
+          src={images[0]}
+          alt={row?.title || row?.name || image.alt || 'product'}
+          className="w-full h-full object-contain"
+        />
+      </div>
+    ) : (
+      // MULTI: strict 2×2 portrait grid (up to 4), no blanks
+      <div className="grid grid-cols-2 gap-4">
+        {images.slice(0, 4).map((src, i) => (
           <div
-            className="mx-auto"
-            style={{
-              maxWidth: 900,           // keeps it tidy on huge screens
-            }}
+            key={`${src}-${i}`}
+            className="bg-[#1C1D20] border border-[#2A2B2E] aspect-[3/4] overflow-hidden"
           >
-            <div
-              className="grid grid-cols-2 gap-4"
-              style={{
-                // ensure portrait tiles
-                gridAutoRows: '1fr',
-              }}
-            >
-              {images.slice(0, 4).map((src, i) => (
-                <div
-                  key={`${src}-${i}`}
-                  className="relative bg-[#1C1D20] border border-[#2A2B2E] overflow-hidden"
-                  style={{
-                    aspectRatio: '3/4', // portrait
-                  }}
-                >
-                  <ImageWithFallback
-                    src={src}
-                    alt={row?.title || row?.name || image.alt || `image-${i + 1}`}
-                    className="w-full h-full object-cover"
-                  />
-                </div>
-              ))}
-            </div>
-
-            {/* Similar button (centered under grid) */}
-            <div className="mt-6 flex justify-center">
-              <button
-                onClick={handleSimilarClick}
-                className="flex items-center gap-2 px-4 py-2 bg-[#1C1D20] hover:bg-[#2A2B2E] border border-[#2A2B2E] text-[#F5F6F7] transition-colors"
-              >
-                <span className="text-[14px] font-medium">Similar</span>
-                <ChevronDown className="h-4 w-4" />
-              </button>
-            </div>
+            <ImageWithFallback
+              src={src}
+              alt={(row?.title || row?.name || image.alt || 'image') + ` ${i + 1}`}
+              className="w-full h-full object-cover"
+            />
           </div>
-        </div>
+        ))}
+      </div>
+    )}
+
+    {/* Similar button (kept simple, left-aligned under content) */}
+    <div className="mt-6">
+      <button
+        onClick={handleSimilarClick}
+        className="flex items-center gap-2 px-4 py-2 bg-[#1C1D20] hover:bg-[#2A2B2E] border border-[#2A2B2E] text-[#F5F6F7] transition-colors"
+      >
+        <span className="text-[14px] font-medium">Similar</span>
+        <ChevronDown className="h-4 w-4" />
+      </button>
+    </div>
+  </div>
+</div>
+
 
         {/* Right: Details panel (dynamic data, same visual style) */}
         <div className="w-[360px] bg-[#0E0E11] border-l border-[#1C1D20] flex flex-col">
