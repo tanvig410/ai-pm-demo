@@ -222,7 +222,7 @@ export function ImageDetailModal({ isOpen, onClose, image, onFindSimilar }: Imag
     {/* Fixed-height stage — tune once and everything inside obeys it */}
     <div className="w-full max-w-[980px]">
       {/* one fixed value controls the overall presence */}
-      <div className="mx-auto h-[72vh] max-h-[860px] flex items-center justify-center">
+      <div className="mx-auto h-[66vh] max-h-[860px] flex items-center justify-center">
         {images.length <= 1 ? (
           /* ===== 1 IMAGE ===== */
           <div className="aspect-[3/4] h-full bg-[#1C1D20] border border-[#2A2B2E] overflow-hidden">
