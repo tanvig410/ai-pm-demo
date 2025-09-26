@@ -195,37 +195,52 @@ export function Discover({
   const [brandsData, setBrandsData] = useState<BrandCard[]>(STATIC_BRANDS);
 
   
-// ---- Replace the entire second useEffect with this one ----
 useEffect(() => {
   let cancelled = false;
 
+  (async () => {
+    try {
+      const rows = await fetchDiscoverRows();
+
+      // Expose full row map for the modal (lookup by product_uid/native id)
+      (window as any).__DISCOVER_MAP__ = new Map(
+        (rows || []).map((r: any) => [r.product_uid || r.native_product_id, r])
+      );
+
       const MAX_TILES = 12;
-      const MIN_SCORE = 0;
-      const REQUIRE_FIELDS = ['image_url', 'product_url'];
 
-      const filtered = rows
-        .filter((r: any) =>
-          REQUIRE_FIELDS.every((f) => r?.[f]) && (r.score ?? 0) >= MIN_SCORE
-        )
-        .sort((a: any, b: any) => (b.score ?? 0) - (a.score ?? 0))
-        .slice(0, MAX_TILES);
+      // Keep this permissive so you always see something if vendor/score missing
+      const usable = (rows || [])
+        .filter((r: any) => r?.image_url || r?.primary_image_url);
 
-      const cards = filtered.map((r: any, i: number) => ({
+      // Light sort if score exists (won’t crash if not present)
+      usable.sort((a: any, b: any) => (b?.score ?? 0) - (a?.score ?? 0));
+
+      const sliced = usable.slice(0, MAX_TILES);
+
+      const cards = sliced.map((r: any, i: number) => ({
         id: r.product_uid || r.native_product_id || `row-${i}`,
-        title: titleCase(r.vendor || 'Unknown'),
-        subtitle: `@${(r.vendor || '').toLowerCase()}`,
+        title: ((r.vendor ?? 'Unknown') + '').replace(/\s+/g, ' ').trim().replace(/\b\w/g, m => m.toUpperCase()),
+        subtitle: '@' + ((r.vendor ?? '').toString().toLowerCase() || 'unknown'),
         url: r.image_url || r.primary_image_url,
         href: r.product_url || '#',
       }));
 
       if (!cancelled && cards.length) {
+        console.log('[Discover] rendering', cards.length, 'dynamic cards');
         setBrandsData(cards);
+      } else {
+        console.warn('[Discover] no dynamic cards computed; keeping static fallback.');
       }
     } catch (e) {
-      console.error('Discover webhook failed:', e);
+      // Any error → keep the static fallback; we already logged the error in fetch
+      console.warn('[Discover] using static fallback due to error.');
     }
   })();
-  return () => { cancelled = true; };
+
+  return () => {
+    cancelled = true;
+  };
 }, []);
 
 
