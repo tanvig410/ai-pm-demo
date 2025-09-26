@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useRef } from 'react';
+// src/components/ImageDetailModal.tsx
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { X, ChevronDown } from 'lucide-react';
 import { ImageWithFallback } from './figma/ImageWithFallback';
 
@@ -9,56 +10,195 @@ interface ImageDetailModalProps {
   onFindSimilar: (imageId: string) => void;
 }
 
-/* -------- helpers -------- */
-function normalizeList(v: any): string[] {
-  if (!v) return [];
-  if (Array.isArray(v)) return v.map(String).filter(Boolean);
-  if (typeof v === 'string') {
-    return v
-      .split(/[,\|\n]/)
-      .map(s => s.trim())
-      .filter(Boolean);
+type Row = {
+  product_uid?: string;
+  native_product_id?: string | number;
+  product_url?: string;
+  vendor?: string;
+  title?: string;
+  name?: string;
+  price?: string | number;
+  currency?: string;
+  material?: string;
+  materials?: string;
+  size_range?: string;
+  sizes?: string;
+  color_options?: string | string[];
+  colors?: string | string[];
+  region?: string;
+  article_code?: string;
+  created_at?: string;
+  date?: string;
+
+  image_url?: string;
+  primary_image_url?: string;
+  image_urls?: string[];                // array if available
+  additional_image_urls?: string;       // comma-separated string
+};
+
+const WEBHOOK = import.meta.env.VITE_DISCOVER_WEBHOOK;
+
+/** Normalize any way your row might store multiple images into a deduped array. */
+function extractImages(row: Row | null, fallbackUrl: string): string[] {
+  if (!row) return [fallbackUrl];
+
+  const pool: string[] = [];
+
+  const push = (v?: string | null) => {
+    if (!v) return;
+    const s = String(v).trim();
+    if (s) pool.push(s);
+  };
+
+  // Typical fields we’ve seen
+  push(row.image_url);
+  push(row.primary_image_url);
+
+  if (Array.isArray(row.image_urls)) {
+    row.image_urls.forEach((u) => push(u));
   }
-  return [];
+
+  if (row.additional_image_urls) {
+    row.additional_image_urls
+      .split(/[,\n]/g)
+      .map((s) => s.trim())
+      .filter(Boolean)
+      .forEach(push);
+  }
+
+  // Filter obvious non-urls or tiny mistakes
+  const cleaned = pool
+    .filter((u) => /^https?:\/\//i.test(u))
+    // de-dup while preserving order
+    .filter((u, i, a) => a.indexOf(u) === i);
+
+  return cleaned.length ? cleaned.slice(0, 4) : [fallbackUrl];
 }
-const uniq = <T,>(arr: T[]) => Array.from(new Set(arr));
+
+/** Try to find the row that matches the clicked card. */
+function findRow(rows: Row[], target: { id: string; url: string }): Row | null {
+  const idLower = (target.id || '').toString().toLowerCase();
+
+  // by product id fields
+  const direct =
+    rows.find(
+      (r) =>
+        (r.product_uid && String(r.product_uid).toLowerCase() === idLower) ||
+        (r.native_product_id && String(r.native_product_id).toLowerCase() === idLower)
+    ) ||
+    // by exact primary image match (fallback)
+    rows.find((r) => r.image_url === target.url || r.primary_image_url === target.url);
+
+  return direct || null;
+}
+
+/** Parse colors from various possible fields into a short array (max 5). */
+function parseColors(row: Row | null): string[] {
+  if (!row) return [];
+  let raw: string[] = [];
+
+  if (Array.isArray(row.color_options)) raw = row.color_options as string[];
+  else if (typeof row.color_options === 'string') raw = row.color_options.split(/[,\n]/g);
+
+  if (Array.isArray(row.colors)) raw = raw.concat(row.colors as string[]);
+  else if (typeof row.colors === 'string') raw = raw.concat(row.colors.split(/[,\n]/g));
+
+  return raw
+    .map((c) => String(c).trim())
+    .filter(Boolean)
+    .filter((c, i, a) => a.indexOf(c) === i)
+    .slice(0, 5);
+}
+
+/** Gentle label helpers */
+const nice = {
+  title: (r: Row | null, fallback: string) =>
+    (r?.title || r?.name || fallback || '').toString(),
+  brand: (r: Row | null) => (r?.vendor || '').toString(),
+  date: (r: Row | null) =>
+    (r?.created_at || r?.date || '').toString(),
+  price: (r: Row | null) => {
+    if (!r) return '';
+    const price = r.price != null ? String(r.price) : '';
+    const cur = r.currency ? String(r.currency) : '';
+    return [cur, price].filter(Boolean).join(' ');
+  },
+  material: (r: Row | null) => (r?.material || r?.materials || '').toString(),
+  sizes: (r: Row | null) => (r?.size_range || r?.sizes || '').toString(),
+  region: (r: Row | null) => (r?.region || '').toString(),
+  article: (r: Row | null) => (r?.article_code || '').toString(),
+};
 
 export function ImageDetailModal({ isOpen, onClose, image, onFindSimilar }: ImageDetailModalProps) {
   const modalRef = useRef<HTMLDivElement>(null);
+  const [row, setRow] = useState<Row | null>(null);
+  const [images, setImages] = useState<string[]>([image.url]);
 
-  // Pull the raw scraped row saved by Discover (if available)
-  const row = useMemo(() => {
-    const map: Map<string, any> | undefined = (window as any).__DISCOVER_MAP__;
-    return map?.get(image?.id) ?? null;
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [image?.id, isOpen]);
-
-  // Build the portrait image list (max 4). ALWAYS include clicked image first.
-  const imgs = useMemo(() => {
-    const primary = image?.url || row?.image_url || row?.primary_image_url;
-
-    const more = [
-      ...normalizeList(row?.image_urls),
-      ...normalizeList(row?.images),
-      ...normalizeList(row?.additional_images),
-    ];
-
-    const all = uniq([primary, ...more].filter(Boolean));
-    // never render blanks; if nothing, still return [image.url]
-    return (all.length ? all : [image?.url]).slice(0, 4);
-  }, [row, image?.url]);
-
+  // Escape key & scroll lock (unchanged)
   useEffect(() => {
-    const onEsc = (e: KeyboardEvent) => e.key === 'Escape' && onClose();
+    const handleEscape = (e: KeyboardEvent) => e.key === 'Escape' && onClose();
     if (isOpen) {
-      document.addEventListener('keydown', onEsc);
+      document.addEventListener('keydown', handleEscape);
       document.body.style.overflow = 'hidden';
     }
     return () => {
-      document.removeEventListener('keydown', onEsc);
+      document.removeEventListener('keydown', handleEscape);
       document.body.style.overflow = 'auto';
     };
   }, [isOpen, onClose]);
+
+  // Hydrate from global map (if Discover already fetched), otherwise fetch webhook directly
+  useEffect(() => {
+    if (!isOpen) return;
+
+    const globalMap: Map<string, Row> | undefined = (window as any).__DISCOVER_MAP__;
+    const tryGlobal = () => {
+      if (!globalMap || !globalMap.size) return false;
+      // try id lookup; fallback to any row whose image matches
+      const possibleIds = [image.id, String(image.id).toLowerCase()];
+      let found: Row | undefined;
+      for (const [k, v] of globalMap.entries()) {
+        if (possibleIds.includes(k) || v.image_url === image.url || v.primary_image_url === image.url) {
+          found = v;
+          break;
+        }
+      }
+      if (found) {
+        setRow(found);
+        setImages(extractImages(found, image.url));
+        return true;
+      }
+      return false;
+    };
+
+    const tryFetch = async () => {
+      if (!WEBHOOK) return;
+      try {
+        const res = await fetch(`${WEBHOOK}?t=${Date.now()}`, { method: 'GET', mode: 'cors' });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const payload = await res.json();
+        const rows: Row[] = Array.isArray(payload) ? payload : payload?.data || [];
+        const match = findRow(rows, image);
+        if (match) {
+          setRow(match);
+          setImages(extractImages(match, image.url));
+        } else {
+          // keep at least the clicked image
+          setRow(null);
+          setImages([image.url]);
+        }
+      } catch (e) {
+        console.warn('[ImageDetailModal] webhook fetch failed, using fallback only:', e);
+        setRow(null);
+        setImages([image.url]);
+      }
+    };
+
+    if (!tryGlobal()) void tryFetch();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isOpen, image.id, image.url]);
+
+  const colors = useMemo(() => parseColors(row), [row]);
 
   const handleSimilarClick = () => {
     onFindSimilar(image.id);
@@ -74,32 +214,40 @@ export function ImageDetailModal({ isOpen, onClose, image, onFindSimilar }: Imag
 
       {/* Modal */}
       <div ref={modalRef} className="relative w-full h-full flex">
-        {/* LEFT: strict portrait grid, padded, no labels, no blanks */}
-        <div className="flex-1 flex items-start justify-start p-8">
-          <div className="w-full max-w-[1200px]">
+        {/* Left: Portrait image grid (2×2, no headers, no placeholders) */}
+        <div className="flex-1 p-6">
+          <div
+            className="mx-auto"
+            style={{
+              maxWidth: 900,           // keeps it tidy on huge screens
+            }}
+          >
             <div
-              className={
-                imgs.length > 1
-                  ? 'grid grid-cols-2 gap-6'
-                  : 'grid grid-cols-1 gap-6'
-              }
+              className="grid grid-cols-2 gap-4"
+              style={{
+                // ensure portrait tiles
+                gridAutoRows: '1fr',
+              }}
             >
-              {imgs.map((src, i) => (
+              {images.slice(0, 4).map((src, i) => (
                 <div
                   key={`${src}-${i}`}
-                  className="relative w-full aspect-[3/4] border border-[#2A2B2E] overflow-hidden"
+                  className="relative bg-[#1C1D20] border border-[#2A2B2E] overflow-hidden"
+                  style={{
+                    aspectRatio: '3/4', // portrait
+                  }}
                 >
                   <ImageWithFallback
                     src={src}
-                    alt={`${image?.alt || 'Image'} ${i + 1}`}
-                    className="absolute inset-0 w-full h-full object-cover"
+                    alt={row?.title || row?.name || image.alt || `image-${i + 1}`}
+                    className="w-full h-full object-cover"
                   />
                 </div>
               ))}
             </div>
 
-            {/* Similar Button */}
-            <div className="mt-6">
+            {/* Similar button (centered under grid) */}
+            <div className="mt-6 flex justify-center">
               <button
                 onClick={handleSimilarClick}
                 className="flex items-center gap-2 px-4 py-2 bg-[#1C1D20] hover:bg-[#2A2B2E] border border-[#2A2B2E] text-[#F5F6F7] transition-colors"
@@ -111,86 +259,115 @@ export function ImageDetailModal({ isOpen, onClose, image, onFindSimilar }: Imag
           </div>
         </div>
 
-        {/* RIGHT: your existing details panel (unchanged UI) */}
+        {/* Right: Details panel (dynamic data, same visual style) */}
         <div className="w-[360px] bg-[#0E0E11] border-l border-[#1C1D20] flex flex-col">
           <div className="flex-1 overflow-y-auto">
             <div className="p-6 space-y-6" style={{ fontFamily: 'Inter, system-ui, sans-serif' }}>
               {/* 1. Product Name */}
               <div>
                 <h2 className="text-[20px] text-[#F5F6F7]" style={{ fontWeight: 600, lineHeight: 1.3 }}>
-                  Poplin Midi-Dress
+                  {nice.title(row, image.alt || 'Product')}
                 </h2>
               </div>
 
-              {/* 2. Brand Name and Date */}
+              {/* 2. Brand + Date */}
               <div className="space-y-2">
                 <h3 className="text-[16px] text-[#F5F6F7]" style={{ fontWeight: 500, lineHeight: 1.4 }}>
-                  COS
+                  {nice.brand(row) || '—'}
                 </h3>
                 <p className="text-[12px] text-[#9CA3AF] uppercase tracking-wide" style={{ fontWeight: 500 }}>
-                  OCT 16, 2023
+                  {nice.date(row) || ''}
                 </p>
               </div>
 
-              {/* 3. @brandname, Region and Article Code */}
+              {/* 3. @brand • region • article */}
               <div className="flex flex-wrap items-center gap-2 text-[14px] text-[#9CA3AF]">
-                <span>@cos</span>
-                <span>•</span>
-                <span>Europe</span>
-                <span>•</span>
-                <span>Article ABC123</span>
+                {nice.brand(row) ? <span>@{nice.brand(row).toLowerCase()}</span> : null}
+                {nice.region(row) && <><span>•</span><span>{nice.region(row)}</span></>}
+                {nice.article(row) && <><span>•</span><span>Article {nice.article(row)}</span></>}
               </div>
 
               {/* 4. Price */}
-              <div>
-                <span className="text-[18px] text-[#F5F6F7]" style={{ fontWeight: 600, lineHeight: 1.4 }}>
-                  $299
-                </span>
-              </div>
+              {nice.price(row) ? (
+                <div>
+                  <span className="text-[18px] text-[#F5F6F7]" style={{ fontWeight: 600, lineHeight: 1.4 }}>
+                    {nice.price(row)}
+                  </span>
+                </div>
+              ) : null}
 
-              {/* 5. Material, Size Range, Color Options */}
+              {/* 5. Material / Sizes / Colors */}
               <div className="space-y-4">
-                <div className="flex justify-between items-center">
-                  <span className="text-[14px] text-[#9CA3AF]">Material</span>
-                  <span className="text-[14px] text-[#F5F6F7]">Cotton Blend</span>
-                </div>
-
-                <div className="flex justify-between items-center">
-                  <span className="text-[14px] text-[#9CA3AF]">Size Range</span>
-                  <span className="text-[14px] text-[#F5F6F7]">XS - XL</span>
-                </div>
-
-                <div className="space-y-2">
+                {/* Material */}
+                {nice.material(row) ? (
                   <div className="flex justify-between items-center">
-                    <span className="text-[14px] text-[#9CA3AF]">Color Options</span>
-                    <span className="text-[14px] text-[#F5F6F7]">5 Available</span>
+                    <span className="text-[14px] text-[#9CA3AF]">Material</span>
+                    <span className="text-[14px] text-[#F5F6F7]">{nice.material(row)}</span>
                   </div>
-                  <div className="flex gap-2">
-                    <div className="w-6 h-6 rounded-full bg-[#000000] border border-[#2A2B2E]" title="Black" />
-                    <div className="w-6 h-6 rounded-full bg-[#FFFFFF] border border-[#2A2B2E]" title="White" />
-                    <div className="w-6 h-6 rounded-full bg-[#8B4513] border border-[#2A2B2E]" title="Brown" />
-                    <div className="w-6 h-6 rounded-full bg-[#000080] border border-[#2A2B2E]" title="Navy" />
-                    <div className="w-6 h-6 rounded-full bg-[#2F4F4F] border border-[#2A2B2E]" title="Dark Slate Gray" />
+                ) : null}
+
+                {/* Size Range */}
+                {nice.sizes(row) ? (
+                  <div className="flex justify-between items-center">
+                    <span className="text-[14px] text-[#9CA3AF]">Size Range</span>
+                    <span className="text-[14px] text-[#F5F6F7]">{nice.sizes(row)}</span>
                   </div>
+                ) : null}
+
+                {/* Colors */}
+                {colors.length ? (
+                  <div className="space-y-2">
+                    <div className="flex justify-between items-center">
+                      <span className="text-[14px] text-[#9CA3AF]">Color Options</span>
+                      <span className="text-[14px] text-[#F5F6F7]">{colors.length} Available</span>
+                    </div>
+                    <div className="flex gap-2">
+                      {colors.map((c, i) => (
+                        <div
+                          key={`${c}-${i}`}
+                          className="w-5 h-5 rounded-full border border-[#2A2B2E]"
+                          title={c}
+                          style={{
+                            // best-effort: if it looks like a hex/css color, use it; else default gray
+                            background:
+                              /^#([0-9a-f]{3}){1,2}$/i.test(c) || /^[a-zA-Z]+$/.test(c) ? (c as string) : '#1f2937',
+                          }}
+                        />
+                      ))}
+                    </div>
+                  </div>
+                ) : null}
+              </div>
+
+              {/* 6. Open Product */}
+              {row?.product_url ? (
+                <div>
+                  <a
+                    href={row.product_url}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="flex items-center gap-2 text-[14px] text-[#9CA3AF] hover:text-[#F5F6F7] transition-colors group"
+                  >
+                    <svg className="w-4 h-4 group-hover:scale-110 transition-transform" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
+                    </svg>
+                    <span>Open Product</span>
+                  </a>
                 </div>
-              </div>
+              ) : null}
 
-              {/* 6. Open Product Link (as icon) */}
-              <div>
-                <button className="flex items-center gap-2 text-[14px] text-[#9CA3AF] hover:text-[#F5F6F7] transition-colors group">
-                  <svg className="w-4 h-4 group-hover:scale-110 transition-transform" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
-                  </svg>
-                  <span>Open Product</span>
-                </button>
-              </div>
-
-              {/* 7. CTAs */}
+              {/* 7. CTAs (unchanged visuals) */}
               <div className="flex flex-col gap-3 pt-2">
-                <button className="w-full px-4 py-3 bg-[#1C1D20] hover:bg-[#2A2B2E] border border-[#2A2B2E] hover:border-[#3A3B3E] text-[#F5F6F7] transition-colors text-[14px] text-center" style={{ fontWeight: 500 }}>
+                <button
+                  className="w-full px-4 py-3 bg-[#1C1D20] hover:bg-[#2A2B2E] border border-[#2A2B2E] hover:border-[#3A3B3E] text-[#F5F6F7] transition-colors text-[14px] text-center"
+                  style={{ fontWeight: 500 }}
+                >
                   Generate AI Techpack
                 </button>
-                <button className="w-full px-4 py-3 bg-[#1C1D20] hover:bg-[#2A2B2E] border border-[#2A2B2E] hover:border-[#3A3B3E] text-[#F5F6F7] transition-colors text-[14px] text-center" style={{ fontWeight: 500 }}>
+                <button
+                  className="w-full px-4 py-3 bg-[#1C1D20] hover:bg-[#2A2B2E] border border-[#2A2B2E] hover:border-[#3A3B3E] text-[#F5F6F7] transition-colors text-[14px] text-center"
+                  style={{ fontWeight: 500 }}
+                >
                   Add to Collection
                 </button>
               </div>
