@@ -3,6 +3,8 @@ command = "npm run build"
 publish = "build"   # your Vite build is outputting to build/
 
 [[redirects]]
-from = "/*"
-to = "/index.html"
-status = 200
+  from = "/api/discover"
+  to = "https://aidesignstudio.app.n8n.cloud/webhook/discover"
+  status = 200
+  force = true
+
